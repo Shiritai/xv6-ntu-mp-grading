@@ -1,0 +1,66 @@
+name: Grading System
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'ntuos2026/*'
+    paths-ignore:
+      - 'README.md'
+      - 'doc/**'
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Need full history for commit verification
+
+      - name: Trust Git Directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Sanitize Environment (Download Trusted Scripts)
+        run: |
+          chmod +x mp.sh
+          ./mp.sh sanitize
+
+      - name: Verify Student Identity
+        id: verify
+        run: |
+          # Use the sanitized grade runner to verify identity
+          python3 grade/verify_committer.py
+        env:
+          # Pass TA Emails via Env (or read from mp.conf inside script)
+          # The script will read mp.conf directly.
+          PYTHONUNBUFFERED: "1"
+
+      - name: Execute Tests (Grading)
+        id: test
+        run: |
+          ./mp.sh grade --json report.json
+        env:
+          OFFICIAL_GRADING: "1"
+
+      - name: Generate Signed Report
+        if: always()
+        run: |
+          if [ -z "${GRADING_PRIVATE_KEY}" ]; then
+            echo "Skipping digital signature: GRADING_PRIVATE_KEY is not set. This is normal for student forks."
+            exit 0
+          fi
+          pip3 install cryptography --break-system-packages || pip3 install cryptography
+          pip3 list
+          python3 grade/sign.py --report report.json
+        env:
+          GRADING_PRIVATE_KEY: ${{ secrets.GRADING_PRIVATE_KEY }}
+
+      - name: Upload Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grading-report
+          path: report.json
