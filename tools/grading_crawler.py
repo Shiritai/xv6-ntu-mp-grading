@@ -118,6 +118,15 @@ def parse_report_from_zip(zip_bytes):
         return None
 
 def process_student_repo(repo_owner, repo_name, ta_commit_sha, reports_dir):
+    # FIRST: Check repository visibility to prevent cheating (turning public after action passes)
+    url = f"{GITHUB_API_URL}/repos/{repo_owner}/{repo_name}"
+    response = requests.get(url, headers=get_headers())
+    if response.status_code == 200:
+        repo_data = response.json()
+        if not repo_data.get("private", True):
+            pr_warn(f"Cheating detected! {repo_owner}/{repo_name} is a PUBLIC repository. Enforcing penalty.")
+            return {"repo": f"{repo_owner}/{repo_name}", "score": 0, "status": "Public Repo Penalty", "run_url": repo_data.get("html_url")}
+
     run = fetch_run_for_commit(repo_owner, repo_name, ta_commit_sha)
     if not run:
         return {"repo": f"{repo_owner}/{repo_name}", "score": 0, "status": "No Run / Missing"}

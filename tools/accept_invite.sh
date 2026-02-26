@@ -49,15 +49,36 @@ echo "Repo keyword: $REPO_KEYWORD"
 echo "--------------------------------------------------"
 
 # --- Key fix: call gh api first, then pipe to jq ---
-INVITATIONS=$(gh api user/repository_invitations --paginate | jq -c --argjson list "$USER_LIST_JSON" --arg kw "$REPO_KEYWORD" '
+# Filter for matching repos and split into private/public lists
+ALL_INVITATIONS=$(gh api user/repository_invitations --paginate)
+INVITATIONS=$(echo "$ALL_INVITATIONS" | jq -c --argjson list "$USER_LIST_JSON" --arg kw "$REPO_KEYWORD" '
   .[] | select(
     (.inviter.login as $u | $list | index($u) != null) and 
-    (.repository.name | contains($kw))
+    (.repository.name | contains($kw)) and
+    (.repository.private == true)
   ) | {id: .id, repo: .repository.full_name, inviter: .inviter.login}
 ')
 
+PUBLIC_REPOS=$(echo "$ALL_INVITATIONS" | jq -c --argjson list "$USER_LIST_JSON" --arg kw "$REPO_KEYWORD" '
+  .[] | select(
+    (.inviter.login as $u | $list | index($u) != null) and 
+    (.repository.name | contains($kw)) and
+    (.repository.private == false)
+  ) | {repo: .repository.full_name, inviter: .inviter.login}
+')
+
+if [[ -n "$PUBLIC_REPOS" ]]; then
+    echo "  ⚠️ WARNING: The following matching invitations are PUBLIC repositories and WILL NOT be accepted:"
+    echo "$PUBLIC_REPOS" | while read -r p_item; do
+        P_REPO=$(echo "$p_item" | jq -r '.repo')
+        P_USER=$(echo "$p_item" | jq -r '.inviter')
+        echo "    - $P_REPO (From: $P_USER)"
+    done
+    echo "  Please ask these students to recreate their repositories as Private."
+fi
+
 if [[ -z "$INVITATIONS" ]]; then
-    echo "  ⚪ No new invitations to accept."
+    echo "  ⚪ No new private invitations to accept."
 else
     # --- Execution Phase ---
     echo "$INVITATIONS" | while read -r item; do

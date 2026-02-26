@@ -59,6 +59,8 @@ When the deadline arrives, follow these **3 Steps** to finalize the grades for t
 
 ### Step 1: Prepare Student Whitelist
 
+> 🛑 **Crucial Policy**: All student repositories **MUST be set to Private**. The grading tools naturally enforce this: `accept_invite.sh` will outright reject invitations from public repositories (and warn you), and `grading_crawler.py` will actively check the visibility of the repo at grading time. If a repository is public, the student receives **0 points** regardless of the CI result.
+
 Extract the **GitHub Usernames** submitted by your students from your institution's Learning Management System (LMS like Canvas, Moodle, Blackboard) or a registration form (e.g., Google Forms). Place these usernames line-by-line into a plain text file. Note that this file can be named arbitrarily and placed anywhere, but the root or `tools/` directory are common choices.
 
 * 📂 **Example Path**: `xv6-ntu-mp-grading/whitelist.txt`
@@ -85,7 +87,7 @@ gh auth login
 
 **What does this do?**
 
-1. **Phase 1 (Accept Invites)**: Calls the GitHub API to list all pending repository invitations, cross-references against `whitelist.txt` and the `"ntuos2026-mpX"` keyword, and automatically batch accepts them.
+1. **Phase 1 (Accept Invites)**: Calls the GitHub API to list all pending repository invitations, cross-references against `whitelist.txt` and the `"ntuos2026-mpX"` keyword, and automatically batch accepts them. **Crucially, it skips any invitations originating from Public repositories and warns the TA so students can be notified to fix their visibility.**
 2. **Phase 2 (Global Scan & Failsafe)**: Regardless of whether new invitations existed, the script will forcefully crawl all repositories where the TA account holds `Collaborator` permissions. It natively queries GitHub's active states and performs an intersection match against `whitelist.txt`.
 3. **Safe Export**: Finally, it writes this 100% accurate, definitive list (e.g., `anon-chihaya/ntuos2026-mpX`) into `../mpX/result/students_mpX.json`, establishing the target inventory for the next phase.
 
@@ -159,4 +161,5 @@ A multi-threaded Python executor responsible for payload injection and CI initia
 A robust Python crawler designed for asynchronous artifact retrieval and data serialization.
 
 * **Mechanism**: Exploits the unforgeable nature of Git SHAs. For each student, it scans workflow runs on their repository for the exact commit SHA injected by the `trigger_grading.py` script. It intelligently waits (polls) for the `in_progress` workflow to `completed`. Once finalized, it downloads the run artifacts, strictly extracts `report.json` authored by the CI test suite, and digests the data.
+* **Anti-Cheating (Visibility Check)**: Before acknowledging any score, it executes a live API call against the repository. If the repository is currently `Public` (e.g. the student turned it public after CI finished), a relentless `0` score is enforced under `Public Repo Penalty`.
 * **Resilience**: Features automatic exponential backoffs and handles partial successes (e.g., missing artifacts, compilation failures are safely logged with zeroed scores rather than crashing).

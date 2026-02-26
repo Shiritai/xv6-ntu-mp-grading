@@ -59,6 +59,8 @@ xv6-ntu-mp-grading/mpX/payload/
 
 ### Step 1: 準備學生白名單
 
+> 🛑 **非常重要的規定**：所有學生的儲存庫**必須設為 Private**。評分工具內建了防禦機制：`accept_invite.sh` 會直接拒絕來自 Public Repo 的邀請（並印出警告清單），且 `grading_crawler.py` 會在抓取成績時主動即時檢查 Repository 的可見度。只要抓到是 Public，無論 Action 執行結果為何，該名學生的最終成績都會被無條件**覆寫為 0 分**。
+
 請從貴校的學習管理系統 (LMS，如 Canvas, Moodle, NTU COOL) 或報名表單 (如 Google Forms) 匯出學生提交的 **GitHub Username**。將這些帳號取出來，每一行一個帳號，存放到純文字白名單檔案中。注意，此檔案可以任意命名且放置於任何目錄下，通常會放在專案根目錄或 `tools/` 資料夾內。
 
 * 📂 **路徑範例**: `xv6-ntu-mp-grading/whitelist.txt`
@@ -85,7 +87,7 @@ gh auth login
 
 **做什麼事？**
 
-1. **階段一 (接受邀請)**：腳本首先呼叫 GitHub API 列出所有待決的 Repository 邀請，核對 `whitelist.txt` 與 `"ntuos2026-mpX"` 字串後，自動批次接受邀請。
+1. **階段一 (接受邀請)**：腳本首先呼叫 GitHub API 列出所有待決的 Repository 邀請，核對 `whitelist.txt` 與 `"ntuos2026-mpX"` 字串後，自動批次接受邀請。**最重要的是，它會跳過任何來自 Public 儲存庫的邀請，並對助教發出警告，以便及時通知學生修正可見度。**
 2. **階段二 (全局掃描與防呆)**：無論上述是否有新邀請，腳本都會強制爬取當前助教帳號名下「所有具備 Collaborator 權限的 Repository」。它會利用 Github 官方的回傳狀態，實時與 `whitelist.txt` 進行交集比對。
 3. **安全匯出**：最終，將這份 100% 準確的實際清單 (例如 `anon-chihaya/ntuos2026-mpX`) 覆寫登錄至 `../mpX/result/students_mpX.json` 中，作為下一步的資產。
 
@@ -159,4 +161,5 @@ anon-chihaya/ntuos2026-mpX,Success,100,https://github.com/anon-chihaya/ntuos2026
 強健的 Python 異步爬蟲，負責監聽 CI 結果與解析 Artifacts。
 
 * **運作機制**：利用 Git SHA 不可偽造的特性。對於 `trigger_grading.py` 發動的那筆特定 Commit SHA，爬蟲會針對每個學生尋找對應的 Workflow Run，並智慧輪詢等待狀態從 `in_progress` 轉為 `completed`。完成後，將下載測試所產出的 Artifact，並精準抽取裡面的 `report.json` 分析成績。
+* **防作弊 (可見度檢查)**：在承認任何分數之前，它會對 Repository 發起即時的 API 查詢。如果此時庫被設為 `Public` (例如學生在發送 Action 成功後才改為公開)，爬蟲將毫不留情地祭出 `0` 分懲罰，並標註狀態為 `Public Repo Penalty`。
 * **容錯性**：具備指數退避 (Exponential Backoff) 重試機制。能妥善處理各類異常狀況（例如編譯失敗或 Artifact 遺失），這些狀況會被安全地記錄為零分並輸出在成績報表中，絕不會導致腳本崩潰中斷。
