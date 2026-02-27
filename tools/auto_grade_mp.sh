@@ -100,8 +100,8 @@ fi
 
 cat crawler.log | grep -A 10 "SUCCESS" || true
 echo "=================================================="
-echo "📊 結果已匯總至:"
+echo "📊 Results aggregated at:"
 echo " - JSON: $(pwd)/${OUTPUT_JSON}"
 echo " - CSV:  $(pwd)/${OUTPUT_CSV}"
-echo " - 詳細 Artifact 備份目錄: $(pwd)/${REPORTS_DIR}/"
+echo " - Detailed Artifacts backup directory: $(pwd)/${REPORTS_DIR}/"
 echo "=================================================="

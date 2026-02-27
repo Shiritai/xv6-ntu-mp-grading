@@ -59,8 +59,16 @@ def process_repo(repo_full_name, payload_dir, github_token, branch, force=False)
         ok, status = run_cmd("git status --porcelain", cwd=clone_dir)
         if not ok or not status:
             if force:
-                pr_warn(f"No changes for {repo_full_name}, but --force is set. Forcing an empty commit to trigger CI.")
-                run_cmd("git commit --allow-empty -m 'chore(grading): force trigger grading test suite'", cwd=clone_dir)
+                pr_warn(f"No changes for {repo_full_name}, but --force is set. Triggering CI via workflow_dispatch.")
+                # We use 'grading.yml' as it's the filename in .github/workflows/
+                ok, err = run_cmd(f"gh workflow run grading.yml --repo {repo_full_name} --ref {branch}", cwd=clone_dir)
+                if not ok:
+                    pr_error(f"Failed to trigger workflow_dispatch for {repo_full_name}:\n{err}")
+                    return None
+                
+                # Retrieve the current SHA (since no new commit was made)
+                ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
+                return sha if ok else None
             else:
                 pr_info(f"No changes (payload already matches) for {repo_full_name}. Skipping redundant push.")
                 ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
