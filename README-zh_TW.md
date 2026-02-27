@@ -48,7 +48,7 @@ xv6-ntu-mp-grading/mpX/payload/
 └── tests/test_mpX_private.py       # 私有測試測資
 ```
 
-> **⚠️ 助教注意**：每次發布新作業，請確保 `payload/` 內的 `.yml`, `sh`, `conf` 皆與 `xv6-ntu-mp` 的 main 分支最新版同步。
+> **⚠️ 助教注意**：每次發布新作業，請確保 `payload/` 內的 `.yml`, `sh`, `conf` 皆與 `xv6-ntu-mp` 的 main 分支最新版同步。**注意 Payload 中的 `mp.sh` 應移除 `check_ta_commit` 邏輯，以確保由助教觸發的正式評分 CI 能順利執行。**
 
 ---
 
@@ -107,7 +107,7 @@ cd xv6-ntu-mp-grading/tools
 **做什麼事？**
 這是一支將 `trigger_grading` 與 `grading_crawler` 無縫串接的平行化腳本：
 
-1. **平行注入 Payload**: 透過多執行緒遍歷名單裡的每一位學生，用指令將 `mpX/payload/` 的內容直接覆蓋寫入學生的 Repo 根目錄，並以助教您的身份並行 Push 提交上去。這將直接覆蓋學生的 CI 設定並且強迫套用最新版本的 Sanitizer。
+1. **平行注入 Payload**: 透過多執行緒遍歷名單裡的每一位學生，用指令將 `mpX/payload/` 的內容直接覆蓋寫入學生的 Repo 根目錄，並以助教您的身份並行 Push 提交上去。這將直接覆蓋學生的 CI 設定並且強迫套用最新版本的 Sanitizer。由於 Payload 移除了「偵測助教 Commit 即跳過」的邏輯，正式評分可以順利進行。
 2. **平行觸發 CI**: 由於是正式的 Commit Push，學生的 GitHub Actions 會被喚醒並執行官方的編譯與測資 (包含我們剛放進去的 Private Tests)。而這筆 Commit 的 SHA 將被儲存為唯一的防偽指紋。
 3. **輪詢爬取與備份**: 腳本隨即進入輪詢等待模式 (Polling)。當它發現該指紋的 Action 順利亮起綠燈 (跑完) 後，它會解壓縮 `.zip` 下載純淨的 `report.json`。最重要的，**每一個同學的 `report.json` 原始成績單都會被獨立保存在 `../mpX/result/reports/` 檔案夾內，防止污染專案根目錄，並供日後審計查核**。
 4. **輸出報表**: 最終，為您在 `mpX/result/` 目錄產出 `final_grades.csv` 與 `.json` 檔案。

@@ -48,7 +48,7 @@ xv6-ntu-mp-grading/mpX/payload/
 └── tests/test_mpX_private.py       # Private test cases
 ```
 
-> **⚠️ TA Notice**: Whenever a new assignment is released, ensure that the `.yml`, `sh`, and `conf` files inside `payload/` are fully synchronized with the latest `main` branch of `xv6-ntu-mp`.
+> **⚠️ TA Notice**: Whenever a new assignment is released, ensure that the `.yml`, `sh`, and `conf` files inside `payload/` are fully synchronized with the latest `main` branch of `xv6-ntu-mp`. **Note that the payload's `mp.sh` purposely excludes the `check_ta_commit` logic to ensure official grading runs successfully even when triggered by a TA.**
 
 ---
 
@@ -107,7 +107,7 @@ cd xv6-ntu-mp-grading/tools
 **What does this do?**
 This is an orchestrator script that seamlessly connects `trigger_grading` and `grading_crawler` in parallel:
 
-1. **Parallel Payload Injection**: Using multithreading, it iterates through every student in the list and forcefully commits the contents of `mpX/payload/` directly into the root of their repository using the TA's identity. This forcefully overwrites the student's CI configurations and guarantees the latest Sanitizer environment.
+1. **Parallel Payload Injection**: Using multithreading, it iterates through every student in the list and forcefully commits the contents of `mpX/payload/` directly into the root of their repository using the TA's identity. This forcefully overwrites the student's CI configurations and guarantees the latest Sanitizer environment. Since the payload lacks the "skip on TA commit" logic found in the student template, the grading CI will correctly proceed.
 2. **Parallel CI Triggers**: Because this constitutes an official Git Push, the student's GitHub Actions will wake up and execute the official compiler and test suite (which now includes the Private Tests). The SHA of this injected commit acts as a unique, unforgeable fingerprint.
 3. **Polling & Crawling**: The script seamlessly transitions into a polling wait state. When it detects that the Action for that specific fingerprint has passed successfully (turned green), it downloads and unzips the pristine `report.json`. Most importantly, **every raw student `report.json` is preserved individually within `../mpX/result/reports/` to prevent repository clutter and serve as an immutable audit trail.**
 4. **Report Output**: Finally, it generates the `final_grades.csv` and `.json` files inside the `mpX/result/` directory.
