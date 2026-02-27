@@ -9,6 +9,7 @@ on:
     paths-ignore:
       - 'README.md'
       - 'doc/**'
+  workflow_dispatch: {}
 
 jobs:
   grade:
