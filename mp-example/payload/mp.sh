@@ -181,7 +181,7 @@ ensure_docker_start_cmd() {
         START_IMAGE=""
         info "Simulation Mode: Docker bypassed."
     else
-        START_IMAGE="$DOCKER_CMD run $DOCKER_CMD_OPTS -v $(realpath "$SCRIPT_DIR"):/home/student/xv6 -w /home/student/xv6 -u 0:0 --rm $IMAGE_NAME"
+        START_IMAGE="$DOCKER_CMD run $DOCKER_CMD_OPTS -v $(realpath "$SCRIPT_DIR"):/home/student/xv6 -w /home/student/xv6 -u $(id -u):$(id -g) --rm $IMAGE_NAME"
     fi
 }
 

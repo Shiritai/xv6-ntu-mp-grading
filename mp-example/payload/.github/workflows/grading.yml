@@ -45,19 +45,6 @@ jobs:
         env:
           OFFICIAL_GRADING: "1"
 
-      - name: Generate Signed Report
-        if: always()
-        run: |
-          if [ -z "${GRADING_PRIVATE_KEY}" ]; then
-            echo "Skipping digital signature: GRADING_PRIVATE_KEY is not set. This is normal for student forks."
-            exit 0
-          fi
-          pip3 install cryptography --break-system-packages || pip3 install cryptography
-          pip3 list
-          python3 grade/sign.py --report report.json
-        env:
-          GRADING_PRIVATE_KEY: ${{ secrets.GRADING_PRIVATE_KEY }}
-
       - name: Upload Artifact
         if: always()
         uses: actions/upload-artifact@v4
