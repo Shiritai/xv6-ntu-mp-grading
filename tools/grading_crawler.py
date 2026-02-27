@@ -143,7 +143,14 @@ def process_student_repo(repo_owner, repo_name, ta_commit_sha, reports_dir):
          return {"repo": f"{repo_owner}/{repo_name}", "score": 0, "status": "Parse Error", "run_url": run_url}
 
     final_score = report.get('scores', {}).get('final_score', 0)
-    pr_success(f"Parsed final score: {final_score}")
+    identity_failed = report.get('grading', {}).get('identity_failed', False)
+    
+    status = "Success"
+    if identity_failed:
+        status = "Identity Failed"
+        pr_warn(f"Student identity verification failed for {repo_owner}/{repo_name}. Score: {final_score}")
+    else:
+        pr_success(f"Parsed final score: {final_score}")
     
     # Preserve the report.json artifact
     try:
@@ -158,7 +165,7 @@ def process_student_repo(repo_owner, repo_name, ta_commit_sha, reports_dir):
     return {
         "repo": f"{repo_owner}/{repo_name}", 
         "score": final_score, 
-        "status": "Success", 
+        "status": status, 
         "run_url": run_url,
         "detail": report
     }

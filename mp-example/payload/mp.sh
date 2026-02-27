@@ -146,9 +146,30 @@ check_docker() {
     fi
 }
 
+check_hooks() {
+    # Skip hook check in GITHUB_ACTIONS or if in Simulation Mode
+    if [ -n "$GITHUB_ACTIONS" ] || [ -n "$SIMULATION_MODE" ]; then
+        return
+    fi
+
+    local hooks_installed=true
+    for hook in pre-commit pre-push; do
+        if [ ! -f "$SCRIPT_DIR/.git/hooks/$hook" ]; then
+            hooks_installed=false
+            break
+        fi
+    done
+
+    if [ "$hooks_installed" = false ]; then
+        warn "Git Hooks are NOT installed. File protection is inactive."
+        hint "Run './mp.sh init' to install hooks and protect your work."
+    fi
+}
+
 check_environment() {
     check_os
     check_docker
+    check_hooks
 }
 
 # Run Checks early
@@ -168,11 +189,21 @@ chown_if_need() {
     local target="$1"
     if [ ! -e "$target" ]; then return 1; fi
     
+    local current_user_group
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        current_user_group=$(stat -f "%u:%g" "$target" 2>/dev/null)
+    else
+        current_user_group=$(stat -c "%u:%g" "$target" 2>/dev/null)
+    fi
+    
     local desired_user_group="$(id -u):$(id -g)"
     
-    # Always forcefully chown to rescue files written as root by docker
-    if [[ "$DOCKER_CMD" != *"podman"* ]]; then
-         maysudo chown -R "$desired_user_group" "$target" >/dev/null 2>&1
+    if [ "$current_user_group" != "$desired_user_group" ]; then
+        # Only warn/run if we are not using podman (which handles mapping)
+        # or if we are using docker
+        if [[ "$DOCKER_CMD" != *"podman"* ]]; then
+             maysudo chown -R "$desired_user_group" "$target" >/dev/null 2>&1
+        fi
     fi
 }
 
@@ -192,47 +223,57 @@ ensure_docker_start_cmd
 # 4. Grading & Sanitization Logic
 # ------------------------------------------------------------------------------
 
-
-
-sanitize() {
-    info "Starting sanitization..."
-    if [ -z "$TRUSTED_REPO" ]; then
-        error "TRUSTED_REPO not defined in mp.conf"
-        exit 1
+check_ta_commit() {
+    # If TA_EMAILS is not defined, skip this check
+    if [ -z "$TA_EMAILS" ]; then
+        return 0
     fi
 
-    local temp_dir=$(mktemp -d)
-    info "Cloning trusted repo from $TRUSTED_REPO..."
-    git clone --depth 1 "$TRUSTED_REPO" "$temp_dir"
+    # Bypass check if in Official Grading mode
+    if [ -n "$OFFICIAL_GRADING" ]; then
+        return 0
+    fi
 
-    # Restore critical build files
-    info "Restoring Makefile and grade/ scripts..."
-    cp "$temp_dir/Makefile" "$SCRIPT_DIR/Makefile"
-    cp -r "$temp_dir/grade/"* "$SCRIPT_DIR/grade/"
-    
-    # Note: We do NOT overwrite mp.sh itself while it is running.
-    
-    rm -rf "$temp_dir"
-    info "Sanitization complete."
+    # Get the committer email of the HEAD commit
+    local committer_email
+    committer_email=$(git log -1 --format='%ce')
+
+    for ta_email in $TA_EMAILS; do
+        if [ "$committer_email" == "$ta_email" ]; then
+            warn "Skipping execution: Commit by TA ($committer_email)."
+            exit 0
+        fi
+    done
 }
+
+
 
 # ------------------------------------------------------------------------------
 # 5. Main Logic
 # ------------------------------------------------------------------------------
 
 case "$1" in
-    "setup")
-        info "Setting up environment for $ASSIGNMENT..."
-        mkdir -p .git/hooks
-        # Link hooks if scripts directory exists
-        if [ -d "scripts" ]; then
+    "init"|"setup")
+        info "Initializing environment for $ASSIGNMENT..."
+        mkdir -p "$SCRIPT_DIR/.git/hooks"
+        
+        # Install hooks from scripts/
+        hook_count=0
+        if [ -d "$SCRIPT_DIR/scripts" ]; then
             for hook in pre-commit pre-push; do
-                if [ -f "scripts/$hook" ]; then
-                    ln -sf "../../scripts/$hook" ".git/hooks/$hook"
+                if [ -f "$SCRIPT_DIR/scripts/$hook" ]; then
+                    ln -sf "../../scripts/$hook" "$SCRIPT_DIR/.git/hooks/$hook"
+                    hook_count=$((hook_count + 1))
                 fi
             done
         fi
-        info "Setup complete."
+        
+        if [ $hook_count -eq 0 ]; then
+            warn "No hook templates found in grade/hooks/."
+        else
+            info "Successfully installed $hook_count Git hooks."
+        fi
+        info "Initialization complete."
         ;;
     "qemu")
         info "Starting QEMU in $IMAGE_NAME..."
@@ -240,22 +281,21 @@ case "$1" in
         chown_if_need "."
         ;;
     "test"|"grade")
+        check_ta_commit
         info "Running tests for $ASSIGNMENT..."
         # Pass arguments to run.py
         shift
         $START_IMAGE python3 grade/run.py "$@"
         chown_if_need "."
         ;;
-    "sanitize")
-        sanitize
-        ;;
+
     "clean")
         info "Cleaning build artifacts..."
         $START_IMAGE make clean
         chown_if_need "."
         ;;
     *)
-        echo "Usage: $0 {setup|qemu|test|grade|sanitize|clean}"
+        echo "Usage: $0 {init|qemu|test|grade|clean}"
         exit 1
         ;;
 esac

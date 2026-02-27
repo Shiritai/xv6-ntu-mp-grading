@@ -42,13 +42,14 @@ For `mpX`, your `payload/` directory must contain:
 
 ```text
 xv6-ntu-mp-grading/mpX/payload/
-├── .github/workflows/grading.yml   # Forces reset of Action workflows to prevent tampering and inject the latest Sanitizer
-├── mp.sh                           # Forces reset of QEMU and test entry points
-├── mp.conf                         # Forces reset of environmental variables and TRUSTED_REPO target
+├── .github/workflows/grading.yml   # Forces reset of Action workflows
+├── mp.sh                           # Forces reset of test entry points
+├── mp.conf                         # Forces reset of environment
+├── tests/grading.conf              # [NEW] Official test list for score isolation
 └── tests/test_mpX_private.py       # Private test cases
 ```
 
-> **⚠️ TA Notice**: Whenever a new assignment is released, ensure that the `.yml`, `sh`, and `conf` files inside `payload/` are fully synchronized with the latest `main` branch of `xv6-ntu-mp`. **Note that the payload's `mp.sh` purposely excludes the `check_ta_commit` logic to ensure official grading runs successfully even when triggered by a TA.**
+> **⚠️ TA Notice**: Whenever a new assignment is released, ensure that the payload's `mp.sh`, `mp.conf`, and `grading.conf` are fully synchronized with the desired official configuration. **Note that the payload purposely does NOT include Git Hooks (`scripts/pre-commit` etc.) as they are not needed for automated grading.**
 
 ---
 
