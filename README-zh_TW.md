@@ -19,7 +19,7 @@
 
 此 Repo 用於管理學生白名單、自動化腳本及各次作業的隱藏依賴。
 
-* **`tools/`**: 放置通用的全自動化評分組合腳本集，包含接受邀請、發動評分、擷取成績等。
+* **`tools/`**: 放置通用的全自動化評分組合腳本集，包含接受邀請、打成績、擷取成績等。
 * **`mpX/`**: 放置各次作業專屬的私有解答與測資酬載 (Payload)，例如 `mp0/`。
 
 ## 2. 作業發布與 Payload 準備 (以 MPX 為例)
@@ -54,7 +54,7 @@ xv6-ntu-mp-grading/mpX/payload/
 
 ## 3. 助教自動評分結算 SOP
 
-學生在作業期間的流程非常簡單：不用填表單，不用上傳 COOL，只需寫程式並 Push 到自己的 Private Repo (並且已將本課程助教的 GitHub 帳號加入 Collaborator)。
+學生在作業期間的流程非常簡單：不用填表單，不用上傳 COOL，只需寫程式並 Push 到自己的 Private Repo (並且已將本作業助教的 GitHub 帳號加入 Collaborator)。
 當作業死線 (Deadline) 屆至，助教請按照以下 **3 個步驟** 完成所有人的評分結算。
 
 ### Step 1: 準備學生白名單
@@ -81,6 +81,8 @@ cd xv6-ntu-mp-grading/tools
 # 登入具有權限的助教 GitHub 帳號 (只需執行一次)
 gh auth login
 
+# 手動或自動創建 whitelist.txt
+
 # 執行自動接受腳本，產出放在對應的作業目錄下
 ./accept_invite.sh -f ../whitelist.txt -r "ntuos2026-mpX" -o ../mpX/result/students_mpX.json
 ```
@@ -95,7 +97,7 @@ gh auth login
 
 ### Step 3: 一鍵自動化評分與結算
 
-**這是一鍵到底的指令**。確認所有的 Repo 皆已登錄於 `../mpX/result/students_mpX.json` 之後，即可發動評分攻擊引擎：
+**這是一鍵到底的指令**。確認所有的 Repo 皆已登錄於 `../mpX/result/students_mpX.json` 之後，即可發動評分引擎：
 
 ```bash
 cd xv6-ntu-mp-grading/tools

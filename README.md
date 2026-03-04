@@ -82,6 +82,8 @@ cd xv6-ntu-mp-grading/tools
 # Log into the authorized TA GitHub account (only required once)
 gh auth login
 
+# Create `whitelist.txt` manually or automatically
+
 # Run the auto-accept script. Output is saved to the corresponding assignment directory
 ./accept_invite.sh -f ../whitelist.txt -r "ntuos2026-mpX" -o ../mpX/result/students_mpX.json
 ```
