@@ -62,10 +62,28 @@ When the deadline arrives, follow these **3 Steps** to finalize the grades for t
 
 > 🛑 **Crucial Policy**: All student repositories **MUST be set to Private**. The grading tools naturally enforce this: `accept_invite.sh` will outright reject invitations from public repositories (and warn you), and `grading_crawler.py` will actively check the visibility of the repo at grading time. If a repository is public, the student receives **0 points** regardless of the CI result.
 
-Extract the **GitHub Usernames** submitted by your students from your institution's Learning Management System (LMS like Canvas, Moodle, Blackboard) or a registration form (e.g., Google Forms). Place these usernames line-by-line into a plain text file. Note that this file can be named arbitrarily and placed anywhere, but the root or `tools/` directory are common choices.
+First, extract the **GitHub Usernames** submitted by your students from your institution's Learning Management System (LMS like Canvas, Moodle, Blackboard) or a registration form (e.g., Google Forms). Place these usernames line-by-line into a plain text file named `whitelist.txt`.
 
-* 📂 **Example Path**: `xv6-ntu-mp-grading/whitelist.txt`
-* 📝 **Example**:
+If you are using a **Google Form spreadsheet** where the GitHub username is the 3rd column, you can automate this extraction process. For example, assuming you know its Sheet ID and GID:
+
+```bash
+cd xv6-ntu-mp-grading/tools
+
+# Define your Google Sheet configuration
+SHEET_ID="..."
+SHEET_GID="..."
+
+# 1. Download the TSV, skip the header (tail -n +2), select relevant columns (cut -f3,4,5), and format as CSV:
+curl -s -L "https://docs.google.com/spreadsheets/d/$SHEET_ID/export?format=tsv&gid=$SHEET_GID" | \
+tr -d '\r' | tail -n +2 | cut -f3,4,5 | \
+awk -F'\t' '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i==NF?ORS:",")}' > student-github-accounts.csv
+
+# 2. Extract the 3rd column (GitHub Username), remove quotes, and save to whitelist.txt:
+awk -F'","' '{print $3}' student-github-accounts.csv | sed 's/"//g' > ../whitelist.txt
+```
+
+* 📂 **Output Path**: `xv6-ntu-mp-grading/whitelist.txt`
+* 📝 **Example Content**:
 
   ```text
   b12345678-test

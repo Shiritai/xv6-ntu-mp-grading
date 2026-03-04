@@ -61,9 +61,27 @@ xv6-ntu-mp-grading/mpX/payload/
 
 > 🛑 **非常重要的規定**：所有學生的儲存庫**必須設為 Private**。評分工具內建了防禦機制：`accept_invite.sh` 會直接拒絕來自 Public Repo 的邀請（並印出警告清單），且 `grading_crawler.py` 會在抓取成績時主動即時檢查 Repository 的可見度。只要抓到是 Public，無論 Action 執行結果為何，該名學生的最終成績都會被無條件**覆寫為 0 分**。
 
-請從貴校的學習管理系統 (LMS，如 Canvas, Moodle, NTU COOL) 或報名表單 (如 Google Forms) 匯出學生提交的 **GitHub Username**。將這些帳號取出來，每一行一個帳號，存放到純文字白名單檔案中。注意，此檔案可以任意命名且放置於任何目錄下，通常會放在專案根目錄或 `tools/` 資料夾內。
+請從貴校的學習管理系統 (LMS，如 Canvas, Moodle, NTU COOL) 或報名表單 (如 Google Forms) 匯出學生提交的 **GitHub Username**。將這些帳號取出來，每一行一個帳號，存放到純文字白名單檔案 `whitelist.txt` 中。
 
-* 📂 **路徑範例**: `xv6-ntu-mp-grading/whitelist.txt`
+如果您使用的是 **Google 表單試算表**，且 GitHub 帳號位於第 3 欄，您可以透過以下指令全自動完成下載與白名單的萃取：
+
+```bash
+cd xv6-ntu-mp-grading/tools
+
+# 設定您的 Google Sheet 參數
+SHEET_ID="..."
+SHEET_GID="..."
+
+# 1. 下載為 TSV 格式，去除標題行 (tail -n +2)，保留特定欄位並轉為 CSV：
+curl -s -L "https://docs.google.com/spreadsheets/d/$SHEET_ID/export?format=tsv&gid=$SHEET_GID" | \
+tr -d '\r' | tail -n +2 | cut -f3,4,5 | \
+awk -F'\t' '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i==NF?ORS:",")}' > student-github-accounts.csv
+
+# 2. 爬取第 3 欄位 (GitHub 帳號)，去除雙引號，並輸出至 whitelist.txt：
+awk -F'","' '{print $3}' student-github-accounts.csv | sed 's/"//g' > ../whitelist.txt
+```
+
+* 📂 **產出路徑**: `xv6-ntu-mp-grading/whitelist.txt`
 * 📝 **內容範例**:
 
   ```text
