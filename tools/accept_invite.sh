@@ -38,7 +38,14 @@ if [[ ! -f "$WHITELIST_FILE" ]]; then
 fi
 
 # --- Read whitelist and convert to JSON array ---
-USER_LIST_JSON=$(grep -v '^$' "$WHITELIST_FILE" | jq -R . | jq -s -c .)
+# Robust parsing: Handle 3-column CSV (3rd col) or 1-column plain list (1st col). Remove quotes/spaces.
+USER_LIST_JSON=$(awk -F',' '{
+    if (NF >= 3) { val=$3 } else { val=$1 }
+    gsub(/"/, "", val); gsub(/[[:space:]]/, "", val);
+    if (val != "") print val
+}' "$WHITELIST_FILE" | grep -v '^$' | jq -R . | jq -s -c .)
+
+[[ "$DRY_RUN" == true ]] && echo "DEBUG: USER_LIST_JSON length: $(echo "$USER_LIST_JSON" | jq 'length')"
 
 echo "--------------------------------------------------"
 echo "Phase 1: Accept Invitations"
@@ -53,7 +60,7 @@ echo "--------------------------------------------------"
 ALL_INVITATIONS=$(gh api user/repository_invitations --paginate)
 INVITATIONS=$(echo "$ALL_INVITATIONS" | jq -c --argjson list "$USER_LIST_JSON" --arg kw "$REPO_KEYWORD" '
   .[] | select(
-    (.inviter.login as $u | $list | index($u) != null) and 
+    (.inviter.login as $u | $list | index($u) != null) and
     (.repository.name | contains($kw)) and
     (.repository.private == true)
   ) | {id: .id, repo: .repository.full_name, inviter: .inviter.login}
@@ -61,7 +68,7 @@ INVITATIONS=$(echo "$ALL_INVITATIONS" | jq -c --argjson list "$USER_LIST_JSON" -
 
 PUBLIC_REPOS=$(echo "$ALL_INVITATIONS" | jq -c --argjson list "$USER_LIST_JSON" --arg kw "$REPO_KEYWORD" '
   .[] | select(
-    (.inviter.login as $u | $list | index($u) != null) and 
+    (.inviter.login as $u | $list | index($u) != null) and
     (.repository.name | contains($kw)) and
     (.repository.private == false)
   ) | {repo: .repository.full_name, inviter: .inviter.login}
