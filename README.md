@@ -30,22 +30,31 @@ When releasing a new assignment (e.g., `mpX`) to students, you must set up the f
 
 Contains the Reference Solution for the assignment (e.g., `mpX.c`). This is used internally by the TA team to verify that the scripts and tests can achieve a perfect score. **This is not distributed to students**, and it may also be entirely omitted.
 
-### B. Prepare Grading Payload & Private Tests (`mpX/payload/`)
+### B. Prepare Public Sync Assets (`mpX/public/`) [Crucial for Hot-Sync]
 
-📌 **This is the most critical directory.**
+📌 **This directory is for 'Assignment Period' updates.**
+Contains any content that needs to be distributed to students before the deadline (e.g., spec fixes in `doc/`, new public tests in `tests/`).
+
+* **Broadcast Tool**: Use `tools/broadcast_update.sh` to push these assets to the student private repositories directly.
+* **Sync Mechanism**: When students run `mp.sh sync`, they will automatically merge the latest TA commits.
+* **Caution**: Ensure **no private information** is placed here.
+
+### C. Prepare Grading Payload & Private Tests (`mpX/payload/`) [Crucial for Zero-Submission]
+
+📌 **This directory is for 'Post-Deadline' grading only. DO NOT publish during the assignment.**
 The zero-submission model relies on forcefully **overwriting the student's repository** with the `payload/` directory exactly as-is right after the deadline. This ensures:
 
 1. Students cannot tamper with the CI execution process.
-2. Private test cases remain strictly hidden until the deadline has concluded.
+2. Private test cases and official grading configurations (`mp.conf`, `grading.conf`) remain strictly hidden until the deadline has concluded.
 
-For `mpX`, your `payload/` directory must contain:
+Example structure:
 
 ```text
 xv6-ntu-mp-grading/mpX/payload/
 ├── .github/workflows/grading.yml   # Forces reset of Action workflows
 ├── mp.sh                           # Forces reset of test entry points
-├── mp.conf                         # Forces reset of environment
-├── tests/grading.conf              # [NEW] Official test list for score isolation
+├── mp.conf                         # Forces reset of grading environment
+├── tests/grading.conf              # Official test list and weights
 └── tests/test_mpX_private.py       # Private test cases
 ```
 
@@ -149,7 +158,7 @@ You can now use `final_grades.csv` to directly grade on NTU COOL!
 
 ## Appendix: API Documentation for Grading Tools
 
-The `tools/` directory encapsulates the zero-submission grading engine. These scripts are highly decoupled, idempotent, and designed to perform flawlessly regardless of environmental interruptions. 
+The `tools/` directory encapsulates the zero-submission grading engine. These scripts are highly decoupled, idempotent, and designed to perform flawlessly regardless of environmental interruptions.
 
 ### `accept_invite.sh`
 
@@ -184,3 +193,17 @@ A robust Python crawler designed for asynchronous artifact retrieval and data se
 * **Mechanism**: Exploits the unforgeable nature of Git SHAs. For each student, it scans workflow runs on their repository for the exact commit SHA injected by the `trigger_grading.py` script. It intelligently waits (polls) for the `in_progress` workflow to `completed`. Once finalized, it downloads the run artifacts, strictly extracts `report.json` authored by the CI test suite, and digests the data.
 * **Anti-Cheating (Visibility Check)**: Before acknowledging any score, it executes a live API call against the repository. If the repository is currently `Public` (e.g. the student turned it public after CI finished), a relentless `0` score is enforced under `Public Repo Penalty`.
 * **Resilience**: Features automatic exponential backoffs and handles partial successes (e.g., missing artifacts, compilation failures are safely logged with zeroed scores rather than crashing).
+
+### `broadcast_update.sh`
+
+The Hot-Sync broadcast tool for TAs to securely map and push updates to student private repositories in parallel.
+
+* **Mechanism**: A Bash wrapper for `broadcast_update.py` that utilizes `concurrent.futures` to concurrently clone each student's private repository, switch to the target assignment branch (`ntuos2026/mpX`), and exclusively sync contents from `mpX/public/` (e.g., docs, specs, public tests). This creates an isolated TA commit directly on the student's remote without causing non-fast-forward conflicts, allowing them to trivially merge changes natively via `mp.sh sync`.
+* **Safety Restriction**: Strictly avoid placing private test cases or official grading configs in `public/`. Official grading assets (like `grading.conf`) must be stored in `payload/`.
+* **Usage**: `./broadcast_update.sh --mp <mp_id> --message <commit_message> [--repos-list <json_file>] [--workers <int>] [--dry-run]`
+  * `--mp`: Assignment identifier (e.g., `mp0`). Assets must be in `mpX/public/`.
+  * `--message`: Commit message. This is what students see in their git log.
+  * `--repos-list`: JSON file containing the array of target repository URLs (generated by `accept_invite.sh`).
+  * `--workers`: (Optional) Number of parallel threads to use. Default is 4.
+  * `--repo`: (Optional) Single target repository URL, used primarily for testing. Mutually exclusive with `--repos-list`.
+  * `--dry-run`: Preview mode. Stages changes and creates a local commit in independent `.tmp/` directories without pushing to the remotes.

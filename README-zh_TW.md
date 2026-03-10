@@ -28,27 +28,37 @@
 
 ### A. 準備官方解答 (`mpX/local_answer/`)
 
-存放該次作業的 Reference Solution (例如 `mpX.c`)，供助教團隊內部驗證腳本與測資是否通過滿分使用，**不參與自動化發放流程**，也可以不必放置。
+包含作業的參考解答（如 `mpX.c`）。這主要是給助教團隊內部驗證腳本與測資是否能拿到滿分。**這不會分發給學生**，甚至可以完全省略。
 
-### B. 準備評分資料與私有測資 (`mpX/payload/`)
+### B. 準備公開同步資產 (`mpX/public/`) [重要：Hot-Sync]
 
-📌 **這是最重要的資料夾**。
-零繳交流程依賴於死線後，將 `payload/` 原封不動地**強制覆蓋蓋入學生的儲存庫**。這能確保：
+📌 **此目錄用於「作業期間」的熱同步更新。**
+包含隨時需要分發給學生的內容（如：修正後的規格文件 `doc/`、新增的公開測資 `tests/`）。
 
-1. 學生無法竄改 CI 的執行過程。
-2. 測資到死線結束後才公開。
+* **觸發工具**：使用 `tools/broadcast_update.sh` 將此處內容平行推送至學生的私人儲存庫。
+* **同步機制**：學生端執行 `mp.sh sync` 時，會自動無縫合併助教的最新 Commit。
+* **注意**：請確保此處**不含任何私密資訊**。
 
-對於 `mpX`，您的 `payload/` 內必須包含：
+### C. 準備評分 payload 與私密測資 (`mpX/payload/`) [重要：Zero-Submission]
+
+📌 **此目錄用於「死線後」的一鍵自動評定，嚴禁於作業期間公開。**
+零繳交評分模式的核心在於：死線一到，各評分工具會**強制覆蓋學生的儲存庫**，將 `payload/` 下的內容原封不動地推送過去。這確保了：
+
+1. 學生無法竄改 CI 執行過程。
+2. 私密測資與官方評分配置 (`mp.conf`, `grading.conf`) 在評分結束前絕對保密。
+
+其檔案結構範例：
 
 ```text
 xv6-ntu-mp-grading/mpX/payload/
-├── .github/workflows/grading.yml   # 強制重置 Action 結構，防止竄改並保證引入最新 Sanitizer
-├── mp.sh                           # 強制重置 QEMU 與測試入口點
-├── mp.conf                         # 強制重置評分環境變數與信任網址 (TRUSTED_REPO)
-└── tests/test_mpX_private.py       # 私有測試測資
+├── .github/workflows/grading.yml   # 強制重置 Action 結構
+├── mp.sh                           # 強制重置入口點
+├── mp.conf                         # 強制重置評分環境 (如信任網址)
+├── tests/grading.conf              # 官方測資權重配置
+└── tests/test_mpX_private.py       # 私密測試測資
 ```
 
-> **⚠️ 助教注意**：每次發布新作業，請確保 `payload/` 內的 `.yml`, `sh`, `conf` 皆與 `xv6-ntu-mp` 的 main 分支最新版同步。**注意 Payload 中的 `mp.sh` 應移除 `check_ta_commit` 邏輯，以確保由助教觸發的正式評分 CI 能順利執行。**
+> **⚠️ 助教注意**：每次發布新作業，請確保 `payload/` 內的 `.yml`, `sh`, `conf`, `grading.conf` 皆與 `xv6-ntu-mp` 的最新期望配置同步。
 
 ---
 
@@ -183,3 +193,17 @@ anon-chihaya/ntuos2026-mpX,Success,100,https://github.com/anon-chihaya/ntuos2026
 * **運作機制**：利用 Git SHA 不可偽造的特性。對於 `trigger_grading.py` 發動的那筆特定 Commit SHA，爬蟲會針對每個學生尋找對應的 Workflow Run，並智慧輪詢等待狀態從 `in_progress` 轉為 `completed`。完成後，將下載測試所產出的 Artifact，並精準抽取裡面的 `report.json` 分析成績。
 * **防作弊 (可見度檢查)**：在承認任何分數之前，它會對 Repository 發起即時的 API 查詢。如果此時庫被設為 `Public` (例如學生在發送 Action 成功後才改為公開)，爬蟲將毫不留情地祭出 `0` 分懲罰，並標註狀態為 `Public Repo Penalty`。
 * **容錯性**：具備指數退避 (Exponential Backoff) 重試機制。能妥善處理各類異常狀況（例如編譯失敗或 Artifact 遺失），這些狀況會被安全地記錄為零分並輸出在成績報表中，絕不會導致腳本崩潰中斷。
+
+### `broadcast_update.sh`
+
+助教端「Hot-Sync」推播工具。
+
+* **運作機制**：此腳本專門處理**作業期間**的公開資產同步。它會利用 `concurrent.futures` 模組，以多執行緒平行方式逐一 Clone 學生的私人 Repo，將 `mpX/public/` 的更新疊加其上並安全 Push 提交。這能完美迴避 Non-Fast-Forward 衝突，讓學生能一鍵 (`mp.sh sync`) 無痛合併最新的規格或測資修正。
+* **安全性限制**：嚴禁存放任何私密測資於 `public/`。若要發布影響評分的正式內容（如 `grading.conf`），應優先放在 `payload/` 區。
+* **用法**：`./broadcast_update.sh --mp <mp_id> --message <commit_message> [--repos-list <json_file>] [--workers <int>] [--dry-run]`
+  * `--mp`：作業代號 (如 `mp0`)。資產應位於 `mpX/public/`。
+  * `--message`：提交訊息，學生將在 git log 中看到此訊息。
+  * `--repos-list`：目標學生 Repository 的 JSON 清單檔案（由 `accept_invite.sh` 產生）。
+  * `--workers`：(選填) 平行處理的執行緒數量，預設為 4。
+  * `--repo`：(選填) 指定單一目標庫 URL，主要用於測試。與 `--repos-list` 互斥。
+  * `--dry-run`：預覽模式。僅在本地獨立的 `tmp/` 暫存目錄中執行同步與提交，不推送至遠端。
