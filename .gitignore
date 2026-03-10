@@ -12,3 +12,4 @@ __pycache__/
 *.csv
 tmp
 whitelist.txt
+tests/sync_validation/sandbox*
