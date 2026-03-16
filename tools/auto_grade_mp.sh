@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+if command -v uv &> /dev/null; then
+    PYTHON_RUN="uv run"
+else
+    PYTHON_RUN="python3"
+fi
+
 # --- Parameter Parsing ---
 USAGE="Usage: $0 --mp <mp_id> --students <students_json_file> [--wait-interval <seconds>] [--max-attempts <attempts>] [--no-wait] [--force]"
 
@@ -40,7 +46,7 @@ echo "Workspace dir: ${GRADING_WORKSPACE}"
 echo "=================================================="
 
 # 1. Trigger CI Grading (Inject Payload)
-TARGETS_FILE="../${MP_ID}/result/grading_targets.json"
+TARGETS_FILE="${GRADING_WORKSPACE}/${MP_ID}/result/grading_targets.json"
 echo "[Phase 1] Injecting Private Tests and Triggering GitHub Actions..."
 
 FORCE_ARG=""
@@ -48,7 +54,7 @@ if [[ "$FORCE" == true ]]; then
     FORCE_ARG="--force"
 fi
 
-python3 "${SDIR}/trigger_grading.py" --mp "${MP_ID}" --students "${STUDENTS_FILE}" --grading-dir "${GRADING_WORKSPACE}" ${FORCE_ARG}
+$PYTHON_RUN "${SDIR}/trigger_grading.py" --mp "${MP_ID}" --students "${STUDENTS_FILE}" --grading-dir "${GRADING_WORKSPACE}" ${FORCE_ARG}
 
 if [[ ! -f "$TARGETS_FILE" ]]; then
     echo "❌ Error: ${TARGETS_FILE} was not successfully generated. Aborting grading."
@@ -60,15 +66,15 @@ if [[ "$NO_WAIT" == true ]]; then
     echo "✅ [Phase 1] Trigger complete! You have enabled --no-wait mode."
     echo "All students' CI are now running in parallel in the background."
     echo "You can manually crawl the scores later at any time using the following command:"
-    echo "  python3 ${SDIR}/grading_crawler.py --targets ${TARGETS_FILE} --output final_grades_${MP_ID}.json --reports-dir reports_${MP_ID}"
+    echo "  $PYTHON_RUN ${SDIR}/grading_crawler.py --targets ${TARGETS_FILE} --output final_grades_${MP_ID}.json --reports-dir reports_${MP_ID}"
     echo "=================================================="
     exit 0
 fi
 
 # 2. Wait and Crawl
-OUTPUT_JSON="../${MP_ID}/result/final_grades.json"
-OUTPUT_CSV="../${MP_ID}/result/final_grades.csv"
-REPORTS_DIR="../${MP_ID}/result/reports"
+OUTPUT_JSON="${GRADING_WORKSPACE}/${MP_ID}/result/final_grades.json"
+OUTPUT_CSV="${GRADING_WORKSPACE}/${MP_ID}/result/final_grades.csv"
+REPORTS_DIR="${GRADING_WORKSPACE}/${MP_ID}/result/reports"
 echo ""
 echo "[Phase 2] Waiting for CI to finish and crawling scores..."
 
@@ -77,7 +83,7 @@ SUCCESS=false
 
 while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
     echo "[Attempt $ATTEMPT / $MAX_ATTEMPTS] Crawling scores..."
-    python3 "${SDIR}/grading_crawler.py" --targets "${TARGETS_FILE}" --output "${OUTPUT_JSON}" --reports-dir "${REPORTS_DIR}" > crawler.log 2>&1
+    $PYTHON_RUN "${SDIR}/grading_crawler.py" --targets "${TARGETS_FILE}" --output "${OUTPUT_JSON}" --reports-dir "${REPORTS_DIR}" >| crawler.log 2>&1 || true
     
     # Check if all runs are complete (No missing or running status in output JSON)
     if grep -q "Grading finished" crawler.log && ! grep -q "\"No Run / Missing\"" "${OUTPUT_JSON}"; then
@@ -101,7 +107,7 @@ fi
 cat crawler.log | grep -A 10 "SUCCESS" || true
 echo "=================================================="
 echo "📊 Results aggregated at:"
-echo " - JSON: $(pwd)/${OUTPUT_JSON}"
-echo " - CSV:  $(pwd)/${OUTPUT_CSV}"
-echo " - Detailed Artifacts backup directory: $(pwd)/${REPORTS_DIR}/"
+echo " - JSON: ${OUTPUT_JSON}"
+echo " - CSV:  ${OUTPUT_CSV}"
+echo " - Detailed Artifacts backup directory: ${REPORTS_DIR}/"
 echo "=================================================="

@@ -160,7 +160,7 @@ if [[ -n "$OUTPUT_FILE" && "$DRY_RUN" == false ]]; then
       --argjson list "$USER_LIST_JSON" \
       --arg kw "$REPO_KEYWORD" \
       'add | [.[] | select((.owner.login as $u | $list | index($u) != null) and (.name | contains($kw))) | .full_name]' \
-      > "$OUTPUT_FILE"
+      >| "$OUTPUT_FILE"
       
     if [[ $? -eq 0 ]]; then
         echo "  ✅ Successfully retrieved global list! Overwritten to: $OUTPUT_FILE"

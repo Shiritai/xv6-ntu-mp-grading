@@ -7,6 +7,8 @@ import tempfile
 import argparse
 import concurrent.futures
 
+TA_GRADING_COMMIT_MSG = 'chore(grading): deploy private tests and trigger grading'
+
 def run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
     if res.returncode != 0:
@@ -25,7 +27,7 @@ def pr_success(msg):
 def pr_warn(msg):
     print(f"\033[93m[WARN]\033[0m {msg}")
 
-def process_repo(repo_full_name, payload_dir, github_token, branch, force=False):
+def process_repo(repo_full_name, payload_dir, branch, force=False):
     pr_info(f"Processing {repo_full_name} on branch '{branch}'...")
     
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -57,7 +59,10 @@ def process_repo(repo_full_name, payload_dir, github_token, branch, force=False)
         
         # Check if there is anything to commit
         ok, status = run_cmd("git status --porcelain", cwd=clone_dir)
-        if not ok or not status:
+        if not ok:
+            pr_error(f"Failed to run git status in {repo_full_name}:\n{status}")
+            return None
+        if not status:
             if force:
                 pr_warn(f"No changes for {repo_full_name}, but --force is set. Triggering CI via workflow_dispatch.")
                 # We use 'grading.yml' as it's the filename in .github/workflows/
@@ -70,11 +75,20 @@ def process_repo(repo_full_name, payload_dir, github_token, branch, force=False)
                 ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
                 return sha if ok else None
             else:
-                pr_info(f"No changes (payload already matches) for {repo_full_name}. Skipping redundant push.")
+                pr_info(f"No changes (payload already matches) for {repo_full_name}. Searching for last TA grading commit via API...")
+                ok, out = run_cmd(f"gh api 'repos/{repo_full_name}/commits?sha={branch}&per_page=10'")
+                if ok:
+                    commits = json.loads(out)
+                    for c in commits:
+                        if TA_GRADING_COMMIT_MSG in c['commit']['message']:
+                            sha = c['sha']
+                            pr_info(f"Found previous TA grading commit {sha[:8]} for {repo_full_name}.")
+                            return sha
+                pr_warn(f"No previous TA grading commit found for {repo_full_name}. Falling back to HEAD.")
                 ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
                 return sha if ok else None
         else:
-            ok, err = run_cmd("git commit -m 'chore(grading): deploy private tests and trigger grading'", cwd=clone_dir)
+            ok, err = run_cmd(f"git commit -m '{TA_GRADING_COMMIT_MSG}'", cwd=clone_dir)
             if not ok:
                 pr_error(f"Failed to commit in {repo_full_name}:\n{err}")
                 return None
@@ -130,7 +144,7 @@ def main():
     targets = []
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_repo = {executor.submit(process_repo, repo, payload_dir, None, target_branch, args.force): repo for repo in student_repos}
+        future_to_repo = {executor.submit(process_repo, repo, payload_dir, target_branch, args.force): repo for repo in student_repos}
         for future in concurrent.futures.as_completed(future_to_repo):
             repo_full_name = future_to_repo[future]
             try:

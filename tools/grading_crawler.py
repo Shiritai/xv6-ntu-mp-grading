@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
 import json
 import zipfile
 import requests
@@ -14,6 +18,7 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 
 # Default workflow path executed by the student's repository
 WORKFLOW_PATH = ".github/workflows/grading.yml"
+TA_GRADING_COMMIT_MSG = "chore(grading): deploy private tests and trigger grading"
 
 def pr_error(msg):
     print(f"\033[91m[ERROR]\033[0m {msg}", file=sys.stderr)
@@ -27,25 +32,27 @@ def pr_success(msg):
 def pr_warn(msg):
     print(f"\033[93m[WARN]\033[0m {msg}")
 
+_headers_cache = None
+
 def get_headers():
+    global _headers_cache
+    if _headers_cache:
+        return _headers_cache
     token = GITHUB_TOKEN
-    
     if not token:
-        # Fallback to fetching the token from the gh CLI
         try:
             res = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=True)
             token = res.stdout.strip()
         except Exception:
             pass
-            
     if not token:
         pr_error("GITHUB_TOKEN environment variable is not set, and 'gh auth token' failed. Please login with gh CLI.")
         sys.exit(1)
-        
-    return {
+    _headers_cache = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json"
     }
+    return _headers_cache
 
 def fetch_run_for_commit(repo_owner, repo_name, commit_sha):
     """Fetches the successful grading workflow run associated with the TA commit."""
