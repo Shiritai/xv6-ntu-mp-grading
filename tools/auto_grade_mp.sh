@@ -75,27 +75,39 @@ fi
 OUTPUT_JSON="${GRADING_WORKSPACE}/${MP_ID}/result/final_grades.json"
 OUTPUT_CSV="${GRADING_WORKSPACE}/${MP_ID}/result/final_grades.csv"
 REPORTS_DIR="${GRADING_WORKSPACE}/${MP_ID}/result/reports"
+TMP_JSON=$(mktemp /tmp/grading_${MP_ID}_XXXXXX.json)
+trap "rm -f ${TMP_JSON}" EXIT
 echo ""
 echo "[Phase 2] Waiting for CI to finish and crawling scores..."
 
 ATTEMPT=1
 SUCCESS=false
 
+CACHE_ARG=""
 while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
     echo "[Attempt $ATTEMPT / $MAX_ATTEMPTS] Crawling scores..."
-    $PYTHON_RUN "${SDIR}/grading_crawler.py" --targets "${TARGETS_FILE}" --output "${OUTPUT_JSON}" --reports-dir "${REPORTS_DIR}" >| crawler.log 2>&1 || true
-    
-    # Check if all runs are complete (No missing or running status in output JSON)
-    if grep -q "Grading finished" crawler.log && ! grep -q "\"No Run / Missing\"" "${OUTPUT_JSON}"; then
+    $PYTHON_RUN "${SDIR}/grading_crawler.py" --targets "${TARGETS_FILE}" --output "${TMP_JSON}" --reports-dir "${REPORTS_DIR}" ${CACHE_ARG} >| crawler.log 2>&1 || true
+    CACHE_ARG="--cache ${TMP_JSON}"
+
+    # Check if all runs are complete:
+    # - "In Progress" = CI still running, worth retrying
+    # - "No Run / Missing" = no workflow exists, permanent failure, don't retry for these
+    if grep -q "Grading finished" crawler.log && ! grep -q "\"In Progress\"" "${TMP_JSON}"; then
+        if grep -q "\"No Run / Missing\"" "${TMP_JSON}"; then
+            echo "⚠️ All CI runs finished, but some students have no matching workflow run (marked 'No Run / Missing')."
+        fi
         echo "✅ All scores successfully crawled!"
         SUCCESS=true
         break
     else
-        echo "⏳ Some students' CI or Artifacts are not ready yet. Waiting for ${WAIT_INTERVAL} seconds before retrying..."
+        echo "⏳ Some students' CI is still in progress. Waiting for ${WAIT_INTERVAL} seconds before retrying..."
         sleep "$WAIT_INTERVAL"
     fi
     ((ATTEMPT++))
 done
+
+# Copy final results from tmp to persistent storage
+cp "${TMP_JSON}" "${OUTPUT_JSON}"
 
 if [ "$SUCCESS" = false ]; then
     echo "⚠️ Warning: Maximum attempts reached ($MAX_ATTEMPTS). Some students' CI might have failed or timed out."
