@@ -8,12 +8,13 @@ else
 fi
 
 # --- Parameter Parsing ---
-USAGE="Usage: $0 --mp <mp_id> --students <students_json_file> [--wait-interval <seconds>] [--max-attempts <attempts>] [--no-wait] [--force]"
+USAGE="Usage: $0 --mp <mp_id> --students <students_json_file> [--wait-interval <seconds>] [--max-attempts <attempts>] [--init-wait <seconds>] [--no-wait] [--force]"
 
 MP_ID=""
 STUDENTS_FILE=""
 WAIT_INTERVAL=15
 MAX_ATTEMPTS=20
+INIT_WAIT=180
 NO_WAIT=false
 FORCE=false
 
@@ -23,6 +24,7 @@ while [[ "$#" -gt 0 ]]; do
         --students) STUDENTS_FILE="$2"; shift ;;
         --wait-interval) WAIT_INTERVAL="$2"; shift ;;
         --max-attempts) MAX_ATTEMPTS="$2"; shift ;;
+        --init-wait) INIT_WAIT="$2"; shift ;;
         --no-wait) NO_WAIT=true ;;
         --force) FORCE=true ;;
         *) echo "Unknown parameter passed: $1"; echo "$USAGE"; exit 1 ;;
@@ -79,6 +81,20 @@ TMP_JSON=$(mktemp /tmp/grading_${MP_ID}_XXXXXX.json)
 trap "rm -f ${TMP_JSON} ${TMP_JSON%.json}.csv" EXIT
 echo ""
 echo "[Phase 2] Waiting for CI to finish and crawling scores..."
+
+# Initial wait for CI pipelines to have a chance to complete
+if [ "$INIT_WAIT" -gt 0 ]; then
+    echo "Waiting ${INIT_WAIT}s for CI pipelines to run before first crawl..."
+    REMAINING_WAIT=$INIT_WAIT
+    while [ "$REMAINING_WAIT" -gt 0 ]; do
+        MINS=$((REMAINING_WAIT / 60))
+        SECS=$((REMAINING_WAIT % 60))
+        printf "\r⏳ %02d:%02d remaining..." "$MINS" "$SECS"
+        sleep 1
+        ((REMAINING_WAIT--))
+    done
+    printf "\r✅ Initial wait complete.            \n"
+fi
 
 ATTEMPT=1
 SUCCESS=false
