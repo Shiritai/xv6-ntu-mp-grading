@@ -8,10 +8,11 @@ else
 fi
 
 # --- Parameter Parsing ---
-USAGE="Usage: $0 --mp <mp_id> --students <students_json_file> [--wait-interval <seconds>] [--max-attempts <attempts>] [--no-wait] [--force]"
+USAGE="Usage: $0 --mp <mp_id> [--students <students_json_file> | --repo <owner/repo>] [--wait-interval <seconds>] [--max-attempts <attempts>] [--no-wait] [--force]"
 
 MP_ID=""
 STUDENTS_FILE=""
+REPO=""
 WAIT_INTERVAL=15
 MAX_ATTEMPTS=40
 NO_WAIT=false
@@ -21,6 +22,7 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --mp) MP_ID="$2"; shift ;;
         --students) STUDENTS_FILE="$2"; shift ;;
+        --repo) REPO="$2"; shift ;;
         --wait-interval) WAIT_INTERVAL="$2"; shift ;;
         --max-attempts) MAX_ATTEMPTS="$2"; shift ;;
         --no-wait) NO_WAIT=true ;;
@@ -30,8 +32,14 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-if [[ -z "$MP_ID" || -z "$STUDENTS_FILE" ]]; then
-    echo "Error: --mp and --students arguments are required."
+if [[ -z "$MP_ID" ]]; then
+    echo "Error: --mp argument is required."
+    echo "$USAGE"
+    exit 1
+fi
+
+if [[ -z "$STUDENTS_FILE" && -z "$REPO" ]]; then
+    echo "Error: Either --students or --repo argument is required."
     echo "$USAGE"
     exit 1
 fi
@@ -41,10 +49,6 @@ GRADING_WORKSPACE="$(dirname "$SDIR")"
 
 echo "=================================================="
 echo "Starting full auto-grading process - ${MP_ID}"
-echo "Students roster: ${STUDENTS_FILE}"
-echo "Workspace dir: ${GRADING_WORKSPACE}"
-echo "=================================================="
-
 # 1. Trigger CI Grading (Inject Payload)
 TARGETS_FILE="${GRADING_WORKSPACE}/${MP_ID}/result/grading_targets.json"
 echo "[Phase 1] Injecting Private Tests and Triggering GitHub Actions..."
@@ -54,7 +58,16 @@ if [[ "$FORCE" == true ]]; then
     FORCE_ARG="--force"
 fi
 
-$PYTHON_RUN "${SDIR}/trigger_grading.py" --mp "${MP_ID}" --students "${STUDENTS_FILE}" --grading-dir "${GRADING_WORKSPACE}" ${FORCE_ARG}
+TARGET_ARG=""
+if [[ -n "$STUDENTS_FILE" ]]; then
+    TARGET_ARG="--students ${STUDENTS_FILE}"
+    echo "Students roster: ${STUDENTS_FILE}"
+elif [[ -n "$REPO" ]]; then
+    TARGET_ARG="--repo ${REPO}"
+    echo "Target Repo: ${REPO}"
+fi
+
+$PYTHON_RUN "${SDIR}/trigger_grading.py" --mp "${MP_ID}" ${TARGET_ARG} --grading-dir "${GRADING_WORKSPACE}" ${FORCE_ARG}
 
 if [[ ! -f "$TARGETS_FILE" ]]; then
     echo "❌ Error: ${TARGETS_FILE} was not successfully generated. Aborting grading."

@@ -112,7 +112,9 @@ def process_repo(repo_full_name, payload_dir, branch, force=False):
 def main():
     parser = argparse.ArgumentParser(description="TA Script to deploy private tests and trigger grading.")
     parser.add_argument("--mp", required=True, help="Machine Problem identifier (e.g., mp0, mp1).")
-    parser.add_argument("--students", required=True, help="Path to JSON file containing list of 'owner/repo'.")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--students", help="Path to JSON file containing list of 'owner/repo'.")
+    group.add_argument("--repo", help="Target 'owner/repo' of a single repository.")
     parser.add_argument("--grading-dir", required=True, help="Path to xv6-ntu-mp-grading workspace.")
     parser.add_argument("--branch", help="Target branch in student repositories (default: ntuos2026/mpX).")
     parser.add_argument("--force", action="store_true", help="Force an empty commit to trigger CI even if there are no payload changes.")
@@ -123,12 +125,16 @@ def main():
 
     # Note: Authentication is handled transparently by the `gh` CLI or underlying `git` config (SSH/HTTPS)
 
-    try:
-        with open(args.students, "r") as f:
-            student_repos = json.load(f)
-    except Exception as e:
-        pr_error(f"Failed to read students list: {e}")
-        sys.exit(1)
+    student_repos = []
+    if args.repo:
+        student_repos = [args.repo]
+    else:
+        try:
+            with open(args.students, "r") as f:
+                student_repos = json.load(f)
+        except Exception as e:
+            pr_error(f"Failed to read students list: {e}")
+            sys.exit(1)
 
     payload_dir = os.path.join(args.grading_dir, args.mp, "payload")
     if not os.path.isdir(payload_dir):
