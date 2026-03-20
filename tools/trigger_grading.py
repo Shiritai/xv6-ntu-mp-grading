@@ -75,18 +75,17 @@ def process_repo(repo_full_name, payload_dir, branch, force=False):
                 ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
                 return sha if ok else None
             else:
-                pr_info(f"No changes (payload already matches) for {repo_full_name}. Searching for last TA grading commit via API...")
-                ok, out = run_cmd(f"gh api 'repos/{repo_full_name}/commits?sha={branch}&per_page=10'")
-                if ok:
-                    commits = json.loads(out)
-                    for c in commits:
-                        if TA_GRADING_COMMIT_MSG in c['commit']['message']:
-                            sha = c['sha']
-                            pr_info(f"Found previous TA grading commit {sha[:8]} for {repo_full_name}.")
-                            return sha
-                pr_warn(f"No previous TA grading commit found for {repo_full_name}. Falling back to HEAD.")
+                pr_info(f"No changes (payload already matches) for {repo_full_name}. Retrieving HEAD commit...")
                 ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
-                return sha if ok else None
+                if not ok:
+                    pr_error(f"Failed to retrieve HEAD SHA for {repo_full_name}.")
+                    return None
+                ok, msg = run_cmd("git log -1 --format=%s", cwd=clone_dir)
+                if ok and TA_GRADING_COMMIT_MSG in msg:
+                    pr_info(f"HEAD is the TA grading commit {sha[:8]} for {repo_full_name}.")
+                else:
+                    pr_warn(f"HEAD {sha[:8]} is not the TA grading commit for {repo_full_name}. Using it anyway.")
+                return sha
         else:
             ok, err = run_cmd(f"git commit -m '{TA_GRADING_COMMIT_MSG}'", cwd=clone_dir)
             if not ok:

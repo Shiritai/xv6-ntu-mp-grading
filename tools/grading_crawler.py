@@ -55,38 +55,51 @@ def get_headers():
     return _headers_cache
 
 def fetch_run_for_commit(repo_owner, repo_name, commit_sha):
-    """Fetches the successful grading workflow run associated with the TA commit."""
+    """Fetches the grading workflow run associated with the TA commit.
+
+    Returns a tuple (run_or_none, status) where status is one of:
+      - "completed": a completed run was found (run object returned)
+      - "in_progress": matching workflow runs exist but none have completed yet
+      - "not_found": no matching workflow runs exist at all for this commit
+    """
     pr_info(f"Querying workflow runs for {repo_owner}/{repo_name} at commit {commit_sha[:8]}...")
     url = f"{GITHUB_API_URL}/repos/{repo_owner}/{repo_name}/actions/runs"
     params = {
         "head_sha": commit_sha,
         "per_page": 100
     }
-    
+
     response = requests.get(url, headers=get_headers(), params=params)
     if response.status_code != 200:
         pr_error(f"Failed to fetch runs API: {response.status_code} - {response.text}")
-        return None
+        return None, "not_found"
 
     data = response.json()
-    valid_runs = []
+    completed_runs = []
+    has_matching_runs = False
 
     for run in data.get("workflow_runs", []):
-        if run.get("path") == WORKFLOW_PATH and run.get("status") == "completed":
-            valid_runs.append(run)
+        if run.get("path") == WORKFLOW_PATH:
+            has_matching_runs = True
+            if run.get("status") == "completed":
+                completed_runs.append(run)
 
-    if not valid_runs:
-         pr_warn(f"No completed grading workflow found for {commit_sha[:8]}. Student hasn't triggered CI or it's still running.")
-         return None
-         
-    success_runs = [r for r in valid_runs if r.get("conclusion") == "success"]
+    if not completed_runs:
+        if has_matching_runs:
+            pr_warn(f"Grading workflow for {commit_sha[:8]} is still running.")
+            return None, "in_progress"
+        else:
+            pr_warn(f"No grading workflow found for {commit_sha[:8]}. The workflow may not exist or was never triggered.")
+            return None, "not_found"
+
+    success_runs = [r for r in completed_runs if r.get("conclusion") == "success"]
     if success_runs:
         best_run = sorted(success_runs, key=lambda x: x['updated_at'], reverse=True)[0]
-        return best_run
-        
-    best_failed_run = sorted(valid_runs, key=lambda x: x['updated_at'], reverse=True)[0]
+        return best_run, "completed"
+
+    best_failed_run = sorted(completed_runs, key=lambda x: x['updated_at'], reverse=True)[0]
     pr_warn(f"Found grading workflow run {best_failed_run['id']} but it failed (conclusion: {best_failed_run.get('conclusion')}). Retrieving artifacts anyway.")
-    return best_failed_run
+    return best_failed_run, "completed"
 
 def download_artifact(artifacts_url):
     response = requests.get(artifacts_url, headers=get_headers())
@@ -134,8 +147,10 @@ def process_student_repo(repo_owner, repo_name, ta_commit_sha, reports_dir):
             pr_warn(f"Cheating detected! {repo_owner}/{repo_name} is a PUBLIC repository. Enforcing penalty.")
             return {"repo": f"{repo_owner}/{repo_name}", "score": 0, "status": "Public Repo Penalty", "run_url": repo_data.get("html_url")}
 
-    run = fetch_run_for_commit(repo_owner, repo_name, ta_commit_sha)
+    run, run_status = fetch_run_for_commit(repo_owner, repo_name, ta_commit_sha)
     if not run:
+        if run_status == "in_progress":
+            return {"repo": f"{repo_owner}/{repo_name}", "score": 0, "status": "In Progress"}
         return {"repo": f"{repo_owner}/{repo_name}", "score": 0, "status": "No Run / Missing"}
 
     run_url = run['html_url']
@@ -184,10 +199,11 @@ def main():
     parser.add_argument("--students", help="Global student list if using --commit (JSON list of 'owner/repo').")
     parser.add_argument("--output", default="final_grades.json", help="Output file for aggregated results.")
     parser.add_argument("--reports-dir", help="Directory to save individual student report.json artifacts. (Default: reports)")
+    parser.add_argument("--cache", help="Path to previous results JSON. Terminal results are reused without API calls.")
     args = parser.parse_args()
 
     targets = []
-    
+
     if args.targets:
         try:
             with open(args.targets, "r") as f:
@@ -207,31 +223,49 @@ def main():
         pr_error("You must provide either --targets OR both --commit and --students.")
         sys.exit(1)
 
-    results = []
-    pr_info(f"Starting grading crawl for {len(targets)} target repositories...")
-    
+    # Load cached results from previous crawl attempt
+    TRANSIENT_STATUSES = {"In Progress"}
+    cached_results = {}
+    if args.cache and os.path.isfile(args.cache):
+        try:
+            with open(args.cache, "r") as f:
+                for entry in json.load(f):
+                    if entry.get("status") not in TRANSIENT_STATUSES:
+                        cached_results[entry["repo"]] = entry
+            pr_info(f"Loaded {len(cached_results)} cached terminal results from previous crawl.")
+        except Exception as e:
+            pr_warn(f"Failed to read cache file: {e}")
+
     reports_dir = args.reports_dir or "reports"
     os.makedirs(reports_dir, exist_ok=True)
-    
+
     valid_targets = []
+    results = []
     for target in targets:
         repo_full_name = target.get("repo")
         commit_sha = target.get("commit_sha")
-        
+
         if not repo_full_name or not commit_sha:
              pr_warn(f"Invalid target entry: {target}. Skipping.")
              continue
-             
+
         parts = repo_full_name.split("/")
         if len(parts) != 2:
              pr_warn(f"Invalid repo format: {repo_full_name}. Skipping.")
              continue
-             
+
+        if repo_full_name in cached_results:
+            pr_info(f"Using cached result for {repo_full_name} (status: {cached_results[repo_full_name]['status']})")
+            results.append(cached_results[repo_full_name])
+            continue
+
         valid_targets.append((repo_full_name, commit_sha, parts[0], parts[1]))
-        
+
+    pr_info(f"Starting grading crawl for {len(valid_targets)} target repositories ({len(cached_results)} cached)...")
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_target = {
-            executor.submit(process_student_repo, owner, name, commit_sha, reports_dir): repo_full_name 
+            executor.submit(process_student_repo, owner, name, commit_sha, reports_dir): repo_full_name
             for repo_full_name, commit_sha, owner, name in valid_targets
         }
         for future in concurrent.futures.as_completed(future_to_target):
