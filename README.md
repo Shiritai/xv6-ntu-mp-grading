@@ -129,17 +129,17 @@ gh auth login
 
 ```bash
 cd xv6-ntu-mp-grading/tools
-./auto_grade_mp.sh --mp mpX --students ../mpX/result/students_mpX.json
+./auto_grade_mp.sh --mp mpX [--students ../mpX/result/students_mpX.json | --repo <owner/repo>] [--prefix ntuos2026]
 ```
 
-*(Tip: If you do not want to wait for the CI to finish running and only want to inject payloads, you can append the `--no-wait` argument. The engine will exit immediately after pushing the payloads. Later, you can run the exact same command without `--no-wait` to cleanly crawl the scores. Furthermore, if a student hasn't changed their code and the Payload remains the same, the system defaults to **skipping the CI trigger (to prevent CI resource waste due to idempotency)** and fetches the previous score. If you must forcefully trigger everyone's CI again, append `--force`.)*
+*(Tip: CI execution usually takes 5-10 minutes. If some students haven't finished, the script will display a "Pending" list and export a partial score snapshot. You can run the exact same command later to collect the remaining scores. Furthermore, if a student's code and the Payload remain unchanged, the system defaults to **skipping the CI trigger (idempotency)** and fetches the previous score. To forcefully re-trigger everyone, append `--force`.)*
 
 **What does this do?**
 This is an orchestrator script that seamlessly connects `trigger_grading` and `grading_crawler` in parallel:
 
 1. **Parallel Payload Injection**: Using multithreading, it iterates through every student in the list and forcefully commits the contents of `mpX/payload/` directly into the root of their repository using the TA's identity. This forcefully overwrites the student's CI configurations and guarantees the latest Sanitizer environment. Since the payload lacks the "skip on TA commit" logic found in the student template, the grading CI will correctly proceed.
 2. **Parallel CI Triggers**: Because this constitutes an official Git Push, the student's GitHub Actions will wake up and execute the official compiler and test suite (which now includes the Private Tests). The SHA of this injected commit acts as a unique, unforgeable fingerprint.
-3. **Polling & Crawling**: The script seamlessly transitions into a polling wait state. When it detects that the Action for that specific fingerprint has passed successfully (turned green), it downloads and unzips the pristine `report.json`. Most importantly, **every raw student `report.json` is preserved individually within `../mpX/result/reports/` to prevent repository clutter and serve as an immutable audit trail.**
+3. **Stateless Single Crawl & Backup**: The script immediately calls the crawler to extract a real-time snapshot of the scores. When it detects that the Action for that specific fingerprint has passed successfully (turned green), it downloads the pristine `report.json`. **Every raw student `report.json` is preserved individually within `../mpX/result/reports/` for auditing.** For students still in progress, their names will be reported, allowing you to seamlessly sync them by re-running the command later.
 4. **Report Output**: Finally, it generates the `final_grades.csv` and `.json` files inside the `mpX/result/` directory.
 
 ```csv
@@ -176,15 +176,16 @@ A shell script designed for robust repository discovery and inventory management
 
 The overarching orchestration shell script. It manages the entire grading lifecycle by invoking Python sub-modules sequentially.
 
-* **Mechanism**: Dispatches `trigger_grading.py` to push payloads and spawn CI workflows. Unless explicitly overridden with `--no-wait`, it subsequently invokes `grading_crawler.py` to poll completion and aggregate outcomes into `.csv` and `.json` reports.
-* **Usage**: `./auto_grade_mp.sh --mp <mp_id> --students <roster_json> [--no-wait] [--force] [--max-attempts <int>] [--wait-interval <int>]`
+* **Mechanism**: Dispatches `trigger_grading.py` to push payloads and spawn CI workflows. It subsequently performs a stateless single crawl via `grading_crawler.py` to capture the current progress and aggregate results.
+* **Usage**: `./auto_grade_mp.sh --mp <mp_id> [--students <roster_json> | --repo <owner/repo>] [--prefix <course_prefix>] [--force]`
 
 ### `trigger_grading.py`
 
 A multi-threaded Python executor responsible for payload injection and CI initiation.
 
-* **Mechanism**: Using `concurrent.futures`, it concurrently accesses listed student repositories via `gh api`. It commits the designated `mpX/payload/` structure directly to the student's root tree, establishing an official TA benchmark environment.
+* **Mechanism**: Using `concurrent.futures`, it concurrently accesses listed student repositories via `gh api`. It commits the designated `mpX/payload/` structure directly to the student's root tree on the target branch (inherited from `--prefix`), establishing an official TA benchmark environment.
 * **Idempotency (Caching Focus)**: Prior to committing, it compares the payload against the student's latest tree. If the payload is identical to the current HEAD, the system infers no meaningful updates occurred and gracefully skips the redundant commit, significantly conserving GitHub Action minutes. Forced overriding is achieved via the `--force` flag.
+* **Usage**: `python3 trigger_grading.py --mp <mp_id> [--students <json> | --repo <owner/repo>] --grading-dir <path> [--prefix <course>] [--force]`
 
 ### `grading_crawler.py`
 

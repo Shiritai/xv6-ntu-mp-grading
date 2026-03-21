@@ -8,16 +8,12 @@ else
 fi
 
 # --- Parameter Parsing ---
-USAGE="Usage: $0 --mp <mp_id> [--students <students_json_file> | --repo <owner/repo>] [--prefix <course_prefix>] [--wait-interval <seconds>] [--max-attempts <attempts>] [--init-wait <seconds>] [--poll] [--force]"
+USAGE="Usage: $0 --mp <mp_id> [--students <students_json_file> | --repo <owner/repo>] [--prefix <course_prefix>] [--force]"
 
 MP_ID=""
 STUDENTS_FILE=""
 REPO=""
 PREFIX="ntuos2026"
-WAIT_INTERVAL=15
-MAX_ATTEMPTS=20
-INIT_WAIT=180
-POLL=false
 FORCE=false
 
 while [[ "$#" -gt 0 ]]; do
@@ -26,10 +22,6 @@ while [[ "$#" -gt 0 ]]; do
         --students) STUDENTS_FILE="$2"; shift ;;
         --repo) REPO="$2"; shift ;;
         --prefix) PREFIX="$2"; shift ;;
-        --wait-interval) WAIT_INTERVAL="$2"; shift ;;
-        --max-attempts) MAX_ATTEMPTS="$2"; shift ;;
-        --init-wait) INIT_WAIT="$2"; shift ;;
-        --poll) POLL=true ;;
         --force) FORCE=true ;;
         *) echo "Unknown parameter passed: $1"; echo "$USAGE"; exit 1 ;;
     esac
@@ -80,16 +72,7 @@ if [[ ! -f "$TARGETS_FILE" ]]; then
     exit 1
 fi
 
-if [[ "$POLL" == false ]]; then
-    echo "=================================================="
-    echo "✅ [Phase 1] Trigger complete! Running in background."
-    echo "⏳ All students' CI are now running in parallel in GitHub Actions."
-    echo "⚠️ This typically takes ~ 5 to 10 minutes to complete."
-    echo "You can manually crawl the scores later at any time using the following command:"
-    echo "  $PYTHON_RUN ${SDIR}/grading_crawler.py --targets ${TARGETS_FILE} --output final_grades_${MP_ID}.json --reports-dir reports_${MP_ID}"
-    echo "=================================================="
-    exit 0
-fi
+
 
 # 2. Wait and Crawl
 OUTPUT_JSON="${GRADING_WORKSPACE}/${MP_ID}/result/final_grades.json"
@@ -99,65 +82,38 @@ TMP_JSON=$(mktemp /tmp/grading_${MP_ID}_XXXXXX.json)
 # shellcheck disable=SC2064
 trap "rm -f '${TMP_JSON}' '${TMP_JSON%.json}.csv'" EXIT
 echo ""
-echo "[Phase 2] Waiting for CI to finish and crawling scores..."
+echo "[Phase 2] Fetching current scores from GitHub Actions..."
 
-# Initial wait for CI pipelines to have a chance to complete
-if [ "$INIT_WAIT" -gt 0 ]; then
-    echo "Waiting ${INIT_WAIT}s for CI pipelines to run before first crawl..."
-    REMAINING_WAIT=$INIT_WAIT
-    while [ "$REMAINING_WAIT" -gt 0 ]; do
-        MINS=$((REMAINING_WAIT / 60))
-        SECS=$((REMAINING_WAIT % 60))
-        printf "\r⏳ %02d:%02d remaining..." "$MINS" "$SECS"
-        sleep 1
-        ((REMAINING_WAIT--))
-    done
-    printf "\r✅ Initial wait complete.            \n"
-fi
-
-ATTEMPT=1
-SUCCESS=false
-
-CACHE_ARG=""
-while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-    echo "[Attempt $ATTEMPT / $MAX_ATTEMPTS] Crawling scores..."
-    $PYTHON_RUN "${SDIR}/grading_crawler.py" --targets "${TARGETS_FILE}" --output "${TMP_JSON}" --reports-dir "${REPORTS_DIR}" ${CACHE_ARG} >| crawler.log 2>&1 || true
-    CACHE_ARG="--cache ${TMP_JSON}"
-
-    # Check if all runs are complete:
-    # - "In Progress" = CI still running, worth retrying
-    # - "No Run / Missing" = no workflow exists, permanent failure, don't retry for these
-    if grep -q "Grading finished" crawler.log && ! grep -q "\"In Progress\"" "${TMP_JSON}"; then
-        if grep -q "\"No Run / Missing\"" "${TMP_JSON}"; then
-            echo "⚠️ All CI runs finished, but some students have no matching workflow run (marked 'No Run / Missing')."
-        fi
-        echo "✅ All scores successfully crawled!"
-        SUCCESS=true
-        break
-    else
-        # Check API rate limit before retrying
-        REMAINING=$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null || echo "0")
-        IFS=$'\t' read -r _PENDING_COUNT NEEDED PENDING_NAMES <<< "$($PYTHON_RUN "${SDIR}/check_progress.py" "${TMP_JSON}" 2>/dev/null)"
-        if [ "$REMAINING" -lt "$NEEDED" ]; then
-            echo "⛔ API rate limit too low (${REMAINING} remaining, ~${NEEDED} needed). Stopping retries."
-            break
-        fi
-        echo "⏳ CIs of students ${PENDING_NAMES} still in progress. Waiting for ${WAIT_INTERVAL} seconds before retrying... (API: ${REMAINING} remaining)"
-        sleep "$WAIT_INTERVAL"
-    fi
-    ((ATTEMPT++))
-done
+$PYTHON_RUN "${SDIR}/grading_crawler.py" --targets "${TARGETS_FILE}" --output "${TMP_JSON}" --reports-dir "${REPORTS_DIR}" >| crawler.log 2>&1 || true
 
 # Copy final results from tmp to persistent storage
 TMP_CSV="${TMP_JSON%.json}.csv"
-cp "${TMP_JSON}" "${OUTPUT_JSON}"
+cp "${TMP_JSON}" "${OUTPUT_JSON}" 2>/dev/null || true
 cp "${TMP_CSV}" "${OUTPUT_CSV}" 2>/dev/null || true
 
-if [ "$SUCCESS" = false ]; then
-    echo "⚠️ Warning: Maximum attempts reached ($MAX_ATTEMPTS). Some students' CI might have failed or timed out."
-    echo "The system has saved the best results retrieved so far to ${OUTPUT_JSON} and ${OUTPUT_CSV}."
+IFS=$'\t' read -r _PENDING_COUNT _NEEDED PENDING_NAMES <<< "$($PYTHON_RUN "${SDIR}/check_progress.py" "${TMP_JSON}" 2>/dev/null || echo -e "0\t0\t")"
+
+echo ""
+if [ "$_PENDING_COUNT" -gt 0 ] || grep -q "\"In Progress\"" "${TMP_JSON}" 2>/dev/null; then
+    echo "=================================================="
+    echo "⏳ 尚有 CI 仍在背景執行中！"
+    if [ -n "$PENDING_NAMES" ] && [ "$PENDING_NAMES" != " " ]; then
+        echo "尚未完成名單: ${PENDING_NAMES}"
+    fi
+    echo "⚠️ 目前已將「最新成績快照」匯出至 ${OUTPUT_CSV}。"
+    echo "💡 請稍後重新執行相同指令，以收齊所有最終成績。"
+    echo "=================================================="
 else
-    echo "🎉 Fully automated grading process successfully concluded!"
+    if grep -q "Grading finished" crawler.log; then
+        if grep -q "\"No Run / Missing\"" "${TMP_JSON}"; then
+            echo "⚠️ 所有 CI 皆已停止執行，但部分學生沒有讀到對應的工作流 (標示為 'No Run / Missing')."
+        fi
+        echo "=================================================="
+        echo "🎉 所有學生的 CI 皆已執行完畢！全自動化評分圓滿結束。"
+        echo "=================================================="
+    else
+        echo "⚠️ Crawler 出現錯誤或未預期結束，請檢查 crawler.log 取得細節。"
+    fi
 fi
 
 cat crawler.log | grep -A 10 "SUCCESS" || true

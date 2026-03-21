@@ -132,14 +132,14 @@ cd xv6-ntu-mp-grading/tools
 ./auto_grade_mp.sh --mp mpX --students ../mpX/result/students_mpX.json
 ```
 
-*(提示：由於批改時 CI 執行通常需要耗時 5-10 分鐘，為了方便，引擎預設在丟出 Payload 觸發 CI 後就會直接返回 (Non-blocking)，讓背景伺服器自行運作，您可以稍後再下指令來純粹抓取成績。如果您想要停留在終端機等待並自動輪詢成績，請附加 `--poll` 參數。另外，如果同學的程式碼完全沒變更，且 Payload 也沒更新，系統預設會**跳過觸發 (避免浪費 CI 資源)**，直接去抓上一次的成績；若您想強制所有人重新跑一次 CI，請加上 `--force` 參數。)*
+*(提示：由於批改時 CI 執行通常需要耗時 5-10 分鐘，如果還沒全部跑完，腳本會提示正在執行中的同學清單，並且輸出部份成績單。如果同學的程式碼完全沒變更，且 Payload 也沒更新，系統預設會**跳過觸發 (避免浪費 CI 資源)**，直接去抓上一次的成績；若您想強制所有人重新跑一次 CI，請加上 `--force` 參數。)*
 
 **做什麼事？**
 這是一支將 `trigger_grading` 與 `grading_crawler` 無縫串接的平行化腳本：
 
 1. **平行注入 Payload**: 透過多執行緒遍歷名單裡的每一位學生，用指令將 `mpX/payload/` 的內容直接覆蓋寫入學生的 Repo 根目錄，並以助教您的身份並行 Push 提交上去。這將直接覆蓋學生的 CI 設定並且強迫套用最新版本的 Sanitizer。由於 Payload 移除了「偵測助教 Commit 即跳過」的邏輯，正式評分可以順利進行。
 2. **平行觸發 CI**: 由於是正式的 Commit Push，學生的 GitHub Actions 會被喚醒並執行官方的編譯與測資 (包含我們剛放進去的 Private Tests)。而這筆 Commit 的 SHA 將被儲存為唯一的防偽指紋。
-3. **輪詢爬取與備份**: 腳本隨即進入輪詢等待模式 (Polling)。當它發現該指紋的 Action 順利亮起綠燈 (跑完) 後，它會解壓縮 `.zip` 下載純淨的 `report.json`。最重要的，**每一個同學的 `report.json` 原始成績單都會被獨立保存在 `../mpX/result/reports/` 檔案夾內，防止污染專案根目錄，並供日後審計查核**。
+3. **無狀態單筆爬取與備份**: 腳本隨即呼叫爬蟲提取當下瞬間的即時成績快照。當它發現該指紋的 Action 已亮綠燈 (跑完) 後，它會解壓縮 `.zip` 下載純淨的 `report.json`。最重要的，**每一個同學的 `report.json` 原始成績單都會被獨立保存在 `../mpX/result/reports/` 檔案夾內，供日後審計查核**。未跑完的同學會被標示在名單上，您只需稍後再執行一次腳本即可無縫補齊。
 4. **輸出報表**: 最終，為您在 `mpX/result/` 目錄產出 `final_grades.csv` 與 `.json` 檔案。
 
 ```csv
@@ -170,20 +170,25 @@ anon-chihaya/ntuos2026-mpX,Success,100,https://github.com/anon-chihaya/ntuos2026
   * `-f`：白名單檔案路徑 (每行一個 GitHub Username)。
   * `-r`：目標 Repo 必須包含的關鍵字 (例如 `ntuos2026-mpX`)。
   * `-o`：輸出目標 JSON 檔案的位置 (例如 `students_mpX.json`)。
-  * `-d`：Dry-run 模式。僅預覽比對邏輯與即將呼叫的 API，但不實際執行 PATCH 接受邀請。
+*   **運作機制**：採用雙軌掃描策略。首先，透過 GitHub API `user/repository_invitations` 批次接受所有待決的 Collaborator 邀請。接著，透過 `user/repos?affiliation=collaborator` 爬取當前助教具備權限的所有儲存庫，並與白名單及特定的關鍵字進行嚴格的交集比對。
+*   **冪等性**：執行過程無狀態 (Stateless)，完全依賴 GitHub 伺服器回傳的真實授權狀態。多次重複執行此腳本，永遠能完美重建同一份無遺漏、無重複的學生清單 (JSON)。
+*   **用法**：`./accept_invite.sh -f <whitelist_txt> -r <repo_keyword> -o <output_json> [-d]`
+    *   `-f`：白名單檔案路徑 (每行一個 GitHub Username)。
+    *   `-r`：目標 Repo 必須包含的關鍵字 (例如 `ntuos2026-mpX`)。
+    *   `-o`：輸出目標 JSON 檔案的位置 (例如 `students_mpX.json`)。
+    *   `-d`：Dry-run 模式。僅預覽比對邏輯與即將呼叫的 API，但不實際執行 PATCH 接受邀請。
 
 ### `auto_grade_mp.sh`
 
 身兼最高指揮官的 Bash 腳本，負責統籌整個自動評分生命週期。
 
-* **運作機制**：首先派發 `trigger_grading.py` 將測資覆蓋並點燃 CI。若未指定 `--no-wait`，接著會自動呼叫 `grading_crawler.py` 進入輪詢狀態，等待並彙整 `.csv` 與 `.json` 成績單。
-* **用法**：`./auto_grade_mp.sh --mp <mp_id> [--students <roster_json> | --repo <owner/repo>] [--prefix <course_prefix>] [--poll] [--force] [--max-attempts <int>] [--wait-interval <int>]`
+*   **運作機制**：首先派發 `trigger_grading.py` 將測資覆蓋並點燃 CI。隨後它會無狀態地自動呼叫單次 `grading_crawler.py` 進行非阻塞快照擷取，並向您彙報還沒完成的同學進度。
+*   **用法**：`./auto_grade_mp.sh --mp <mp_id> [--students <roster_json> | --repo <owner/repo>] [--prefix <course_prefix>] [--force]`
 
 ### `trigger_grading.py`
 
 由 Python 撰寫的多執行緒注入引擎，負責發放考題與觸發 CI。
 
-* **運作機制**：透過 `concurrent.futures` 平行調用 `gh api`。將本地端的 `mpX/payload/` 檔案結構，原封不動地強制 Commit 到學生儲存庫的根目錄，藉此建構官方基準的測試環境並觸發 GitHub Actions。
 * **冪等性與快取**：在執行 Commit 前，會先比對欲覆蓋的 Payload 檔案與學生 Repo 目前最新的 Tree 結構是否完全一致。如果完全相同，代表 Payload 沒有更新且學生並未竄改環境，系統將智慧略過該次 Commit。這能省下大量不必要的 GitHub Action 運算時間。可選用 `--force` 參數強制跳過比對執行覆蓋。
 
 ### `grading_crawler.py`
