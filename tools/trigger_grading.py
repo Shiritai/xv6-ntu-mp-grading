@@ -64,7 +64,7 @@ def process_repo(repo_full_name, payload_dir, branch, force=False):
             return None
         if not status:
             if force:
-                pr_warn(f"No changes for {repo_full_name}, but --force is set. Triggering CI via workflow_dispatch.")
+                pr_warn(f"No changes for {repo_full_name}, but --force-push is set. Triggering CI via workflow_dispatch.")
                 # We use 'grading.yml' as it's the filename in .github/workflows/
                 ok, err = run_cmd(f"gh workflow run grading.yml --repo {repo_full_name} --ref {branch}", cwd=clone_dir)
                 if not ok:
@@ -73,7 +73,7 @@ def process_repo(repo_full_name, payload_dir, branch, force=False):
                 
                 # Retrieve the current SHA (since no new commit was made)
                 ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
-                return sha if ok else None
+                return (sha, True) if ok else (None, False)
             else:
                 pr_info(f"No changes (payload already matches) for {repo_full_name}. Retrieving HEAD commit...")
                 ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
@@ -85,7 +85,7 @@ def process_repo(repo_full_name, payload_dir, branch, force=False):
                     pr_info(f"HEAD is the TA grading commit {sha[:8]} for {repo_full_name}.")
                 else:
                     pr_warn(f"HEAD {sha[:8]} is not the TA grading commit for {repo_full_name}. Using it anyway.")
-                return sha
+                return sha, False
         else:
             ok, err = run_cmd(f"git commit -m '{TA_GRADING_COMMIT_MSG}'", cwd=clone_dir)
             if not ok:
@@ -106,7 +106,8 @@ def process_repo(repo_full_name, payload_dir, branch, force=False):
             return None
             
         pr_success(f"Successfully triggered grading for {repo_full_name} (Commit: {sha})")
-        return sha
+        # If we made a commit or used workflow_dispatch, a "push/trigger" occurred.
+        return sha, True
 
 def main():
     parser = argparse.ArgumentParser(description="TA Script to deploy private tests and trigger grading.")
@@ -117,7 +118,8 @@ def main():
     parser.add_argument("--grading-dir", required=True, help="Path to xv6-ntu-mp-grading workspace.")
     parser.add_argument("--branch", help="Target branch in student repositories (overrides prefix).")
     parser.add_argument("--prefix", default="ntuos2026", help="Course prefix for branch.")
-    parser.add_argument("--force", action="store_true", help="Force an empty commit to trigger CI even if there are no payload changes.")
+    parser.add_argument("--force-push", action="store_true", help="Force an empty commit to trigger CI even if there are no payload changes.")
+    parser.add_argument("--exclude-repo", help="Comma-separated list of 'owner/repo' to exclude from grading.")
     args = parser.parse_args()
 
     # Automatically derive the default branch if not explicitly provided
@@ -135,6 +137,12 @@ def main():
     else:
         student_repos = [args.repo]
 
+    if args.exclude_repo:
+        exclude_list = [r.strip() for r in args.exclude_repo.split(",") if r.strip()]
+        before_count = len(student_repos)
+        student_repos = [r for r in student_repos if r not in exclude_list]
+        pr_info(f"Excluded {before_count - len(student_repos)} repositories. Remaining: {len(student_repos)}")
+
     payload_dir = os.path.join(args.grading_dir, args.mp, "payload")
     if not os.path.isdir(payload_dir):
         pr_warn(f"Payload directory {payload_dir} not found. Will trigger grading with empty commits.")
@@ -148,17 +156,22 @@ def main():
     
     targets = []
     
+    push_occurred = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_repo = {executor.submit(process_repo, repo, payload_dir, target_branch, args.force): repo for repo in student_repos}
+        future_to_repo = {executor.submit(process_repo, repo, payload_dir, target_branch, args.force_push): repo for repo in student_repos}
         for future in concurrent.futures.as_completed(future_to_repo):
             repo_full_name = future_to_repo[future]
             try:
-                commit_sha = future.result()
-                if commit_sha:
-                    targets.append({
-                        "repo": repo_full_name,
-                        "commit_sha": commit_sha
-                    })
+                result = future.result()
+                if result:
+                    commit_sha, pushed = result
+                    if commit_sha:
+                        targets.append({
+                            "repo": repo_full_name,
+                            "commit_sha": commit_sha
+                        })
+                    if pushed:
+                        push_occurred = True
             except Exception as exc:
                 pr_error(f"Repository {repo_full_name} generated an exception: {exc}")
             print("-" * 40)
@@ -169,6 +182,15 @@ def main():
             json.dump(targets, f, indent=2)
     except Exception as e:
         pr_error(f"Failed to save targets: {e}")
+
+    if push_occurred:
+        push_signal_file = os.path.join(mp_out_dir, ".push_occurred")
+        try:
+            with open(push_signal_file, "w") as f:
+                f.write("true")
+            pr_info(f"Push detected. Signal file created at {push_signal_file}")
+        except Exception as e:
+            pr_error(f"Failed to create push signal file: {e}")
 
 if __name__ == "__main__":
     main()

@@ -8,13 +8,15 @@ else
 fi
 
 # --- Parameter Parsing ---
-USAGE="Usage: $0 --mp <mp_id> [--students <students_json_file> | --repo <owner/repo>] [--prefix <course_prefix>] [--force]"
+USAGE="Usage: $0 --mp <mp_id> [--students <students_json_file> | --repo <owner/repo>] [--prefix <course_prefix>] [--force-push] [--force-fetch] [--exclude-repo <repo1,repo2>]"
 
 MP_ID=""
 STUDENTS_FILE=""
 REPO=""
 PREFIX="ntuos2026"
-FORCE=false
+FORCE_PUSH=false
+FORCE_FETCH=false
+EXCLUDE_REPO=""
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -22,7 +24,9 @@ while [[ "$#" -gt 0 ]]; do
         --students) STUDENTS_FILE="$2"; shift ;;
         --repo) REPO="$2"; shift ;;
         --prefix) PREFIX="$2"; shift ;;
-        --force) FORCE=true ;;
+        --force-push) FORCE_PUSH=true ;;
+        --force-fetch) FORCE_FETCH=true ;;
+        --exclude-repo) EXCLUDE_REPO="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; echo "$USAGE"; exit 1 ;;
     esac
     shift
@@ -47,15 +51,20 @@ echo "=================================================="
 echo "Starting full auto-grading process - ${MP_ID}"
 echo "Students roster: ${STUDENTS_FILE}"
 echo "Workspace dir: ${GRADING_WORKSPACE}"
+echo "Force Push: ${FORCE_PUSH}"
+echo "Force Fetch: ${FORCE_FETCH}"
+echo "Exclude Repo: ${EXCLUDE_REPO}"
 echo "=================================================="
 
 # 1. Trigger CI Grading (Inject Payload)
 TARGETS_FILE="${GRADING_WORKSPACE}/${MP_ID}/result/grading_targets.json"
+# Ensure we start with a clean state for push detection
+rm -f "${GRADING_WORKSPACE}/${MP_ID}/result/.push_occurred"
 echo "[Phase 1] Injecting Private Tests and Triggering GitHub Actions..."
 
-FORCE_ARG=""
-if [[ "$FORCE" == true ]]; then
-    FORCE_ARG="--force"
+FORCE_PUSH_ARG=""
+if [[ "$FORCE_PUSH" == true ]]; then
+    FORCE_PUSH_ARG="--force-push"
 fi
 
 TARGET_ARG=""
@@ -65,14 +74,29 @@ elif [[ -n "$REPO" ]]; then
     TARGET_ARG="--repo ${REPO}"
 fi
 
-$PYTHON_RUN "${SDIR}/trigger_grading.py" --mp "${MP_ID}" ${TARGET_ARG} --grading-dir "${GRADING_WORKSPACE}" ${FORCE_ARG} --branch "${PREFIX}/${MP_ID}"
+EXCLUDE_ARG=""
+if [[ -n "$EXCLUDE_REPO" ]]; then
+    EXCLUDE_ARG="--exclude-repo ${EXCLUDE_REPO}"
+fi
+
+$PYTHON_RUN "${SDIR}/trigger_grading.py" --mp "${MP_ID}" ${TARGET_ARG} --grading-dir "${GRADING_WORKSPACE}" ${FORCE_PUSH_ARG} --branch "${PREFIX}/${MP_ID}" ${EXCLUDE_ARG}
 
 if [[ ! -f "$TARGETS_FILE" ]]; then
     echo "❌ Error: ${TARGETS_FILE} was not successfully generated. Aborting grading."
     exit 1
 fi
 
-
+PUSH_SIGNAL_FILE="${GRADING_WORKSPACE}/${MP_ID}/result/.push_occurred"
+if [[ -f "$PUSH_SIGNAL_FILE" ]]; then
+    echo ""
+    echo "=================================================="
+    echo "🚀 [Phase 1] New Push or Force Trigger detected!"
+    echo "   GitHub Actions have been triggered. Please wait for CI to finish."
+    echo "   Automatically skipping [Phase 2] Crawler."
+    echo "=================================================="
+    rm -f "$PUSH_SIGNAL_FILE"
+    exit 0
+fi
 
 # 2. Wait and Crawl
 OUTPUT_JSON="${GRADING_WORKSPACE}/${MP_ID}/result/final_grades.json"
@@ -84,7 +108,12 @@ trap "rm -f '${TMP_JSON}' '${TMP_JSON%.json}.csv'" EXIT
 echo ""
 echo "[Phase 2] Fetching current scores from GitHub Actions..."
 
-$PYTHON_RUN "${SDIR}/grading_crawler.py" --targets "${TARGETS_FILE}" --output "${TMP_JSON}" --reports-dir "${REPORTS_DIR}" >| crawler.log 2>&1 || true
+FORCE_FETCH_ARG=""
+if [[ "$FORCE_FETCH" == true ]]; then
+    FORCE_FETCH_ARG="--force-fetch"
+fi
+
+$PYTHON_RUN "${SDIR}/grading_crawler.py" --targets "${TARGETS_FILE}" --output "${TMP_JSON}" --reports-dir "${REPORTS_DIR}" --cache "${OUTPUT_JSON}" ${FORCE_FETCH_ARG} >| crawler.log 2>&1 || true
 
 # Copy final results from tmp to persistent storage
 TMP_CSV="${TMP_JSON%.json}.csv"
@@ -96,23 +125,23 @@ IFS=$'\t' read -r _PENDING_COUNT _NEEDED PENDING_NAMES <<< "$($PYTHON_RUN "${SDI
 echo ""
 if [ "$_PENDING_COUNT" -gt 0 ] || grep -q "\"In Progress\"" "${TMP_JSON}" 2>/dev/null; then
     echo "=================================================="
-    echo "⏳ 尚有 CI 仍在背景執行中！"
+    echo "⏳ Some CI runs are still in progress!"
     if [ -n "$PENDING_NAMES" ] && [ "$PENDING_NAMES" != " " ]; then
-        echo "尚未完成名單: ${PENDING_NAMES}"
+        echo "Pending: ${PENDING_NAMES}"
     fi
-    echo "⚠️ 目前已將「最新成績快照」匯出至 ${OUTPUT_CSV}。"
-    echo "💡 請稍後重新執行相同指令，以收齊所有最終成績。"
+    echo "⚠️ Latest score snapshots exported to ${OUTPUT_CSV}."
+    echo "💡 Please run the same command later to gather final results."
     echo "=================================================="
 else
     if grep -q "Grading finished" crawler.log; then
         if grep -q "\"No Run / Missing\"" "${TMP_JSON}"; then
-            echo "⚠️ 所有 CI 皆已停止執行，但部分學生沒有讀到對應的工作流 (標示為 'No Run / Missing')."
+            echo "⚠️ All CI runs stopped, but some students have no workflow runs (marked 'No Run / Missing')."
         fi
         echo "=================================================="
-        echo "🎉 所有學生的 CI 皆已執行完畢！全自動化評分圓滿結束。"
+        echo "🎉 All student CI runs have finished! Grading complete."
         echo "=================================================="
     else
-        echo "⚠️ Crawler 出現錯誤或未預期結束，請檢查 crawler.log 取得細節。"
+        echo "⚠️ Crawler exited unexpectedly. Please check crawler.log for details."
     fi
 fi
 
