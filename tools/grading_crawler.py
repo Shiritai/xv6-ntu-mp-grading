@@ -200,6 +200,7 @@ def main():
     parser.add_argument("--output", default="final_grades.json", help="Output file for aggregated results.")
     parser.add_argument("--reports-dir", help="Directory to save individual student report.json artifacts. (Default: reports)")
     parser.add_argument("--cache", help="Path to previous results JSON. Terminal results are reused without API calls.")
+    parser.add_argument("--force-fetch", action="store_true", help="Force refetching results from GitHub API even if cached results exist.")
     args = parser.parse_args()
 
     targets = []
@@ -254,7 +255,7 @@ def main():
              pr_warn(f"Invalid repo format: {repo_full_name}. Skipping.")
              continue
 
-        if repo_full_name in cached_results:
+        if repo_full_name in cached_results and not args.force_fetch:
             pr_info(f"Using cached result for {repo_full_name} (status: {cached_results[repo_full_name]['status']})")
             results.append(cached_results[repo_full_name])
             continue
