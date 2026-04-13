@@ -24,11 +24,6 @@ jobs:
       - name: Trust Git Directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Sanitize Environment (Download Trusted Scripts)
-        run: |
-          chmod +x mp.sh
-          ./mp.sh sanitize
-
       - name: Verify Student Identity
         id: verify
         run: |
@@ -42,9 +37,16 @@ jobs:
       - name: Execute Tests (Grading)
         id: test
         run: |
-          ./mp.sh grade --json report.json
+          ./mp.sh grade --json report.json --markdown grade-report.md
         env:
           OFFICIAL_GRADING: "1"
+
+      - name: Add Visual Summary
+        if: always()
+        run: |
+          if [ -f grade-report.md ]; then
+            cat grade-report.md >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload Artifact
         if: always()
