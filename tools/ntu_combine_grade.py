@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
-"""Combine grade JSON with course CSV using student account mapping."""
+"""Combine grade JSON with course CSV using student account mapping.
+
+Inputs:
+  --cool   Full grade sheet CSV exported from NTU COOL (the TA downloads this
+           from the course's Grades page).
+  --grade  final_grades.json produced by auto_grade_mp.sh (array of records
+           with score + detail.student_info.github_username).
+  --map    Student account mapping with columns:
+             Name, StudentID, GithubUsername
+           Accepts either TSV or CSV (delimiter auto-detected from the file
+           extension, falling back to csv.Sniffer for ambiguous inputs).
+"""
 
 import argparse
 import csv
+import io
 import json
-import re
+import os
 import sys
 import unicodedata
 
@@ -79,34 +91,91 @@ def find_mp_column(header, mp_keyword):
     return None
 
 
+def detect_map_delimiter(path, sample):
+    """Pick the delimiter for the --map file.
+
+    Prefer the extension (.csv -> ',', .tsv -> '\\t'); fall back to csv.Sniffer
+    for anything else (e.g. .txt) and default to tab if sniffing fails."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".csv":
+        return ","
+    if ext == ".tsv":
+        return "\t"
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",\t").delimiter
+    except csv.Error:
+        return "\t"
+
+
+def load_map(path):
+    """Parse the Name/StudentID/GithubUsername mapping from TSV or CSV."""
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        text = f.read()
+    if not text.strip():
+        return []
+    delimiter = detect_map_delimiter(path, text[:4096])
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    entries = []
+    for parts in reader:
+        if len(parts) < 3:
+            continue
+        name = parts[0].strip()
+        student_id = parts[1].strip()
+        github = parts[2].strip()
+        if not (name and student_id and github):
+            continue
+        entries.append({
+            "name": name,
+            "student_id": student_id,
+            "github_username": github,
+        })
+    return entries
+
+
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--cool", required=True)
-    parser.add_argument("--grade", required=True)
-    parser.add_argument("--map", required=True)
-    parser.add_argument("--mp", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--tmp", required=True)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Translate auto_grade_mp's final_grades.json scores into a "
+            "row of an NTU COOL grade sheet CSV, keyed by student ID and "
+            "verified by name."
+        ),
+    )
+    parser.add_argument(
+        "--cool", required=True,
+        help="Full grade sheet CSV downloaded from NTU COOL (input + template).",
+    )
+    parser.add_argument(
+        "--grade", required=True,
+        help="final_grades.json produced by auto_grade_mp.sh.",
+    )
+    parser.add_argument(
+        "--map", required=True,
+        help=(
+            "Student account mapping with columns "
+            "Name, StudentID, GithubUsername. Accepts .tsv or .csv "
+            "(delimiter auto-detected)."
+        ),
+    )
+    parser.add_argument(
+        "--mp", required=True,
+        help="Assignment keyword identifying the target COOL column (e.g. mp0).",
+    )
+    parser.add_argument(
+        "--output", required=True,
+        help="Destination CSV path (ready to upload back to NTU COOL).",
+    )
+    parser.add_argument(
+        "--tmp", required=True,
+        help="Intermediate TSV path used for auditing the merged mapping.",
+    )
     args = parser.parse_args()
 
     # Load grade JSON
     with open(args.grade, "r", encoding="utf-8") as f:
         grades = json.load(f)
 
-    # Load map TSV: columns are Name, StudentID, GithubUsername
-    map_entries = []
-    with open(args.map, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 3:
-                map_entries.append({
-                    "name": parts[0].strip(),
-                    "student_id": parts[1].strip(),
-                    "github_username": parts[2].strip(),
-                })
+    # Load map (TSV or CSV, auto-detected): Name, StudentID, GithubUsername
+    map_entries = load_map(args.map)
 
     # Build grade lookup by github_username (lowercase)
     grade_by_gh = {}
@@ -217,15 +286,16 @@ def main():
         if tmp_entry["grade"] is None:
             continue
 
-        # Check name match
+        # Student ID matched — trust it. Still warn on name mismatch so the
+        # TA can eyeball suspicious rows, but don't skip the grade.
         if not name_matches(tmp_entry["name"], csv_student_name):
             print(
-                f"Ghost {tmp_entry['name']}({tmp_entry['student_id']}), "
-                f"GH-Name {tmp_entry['github_username']}, "
-                f"Score {tmp_entry['grade']}%",
+                f"Name mismatch (grade still applied): map={tmp_entry['name']!r} "
+                f"vs COOL={csv_student_name!r} "
+                f"({tmp_entry['student_id']}, GH {tmp_entry['github_username']}, "
+                f"Score {tmp_entry['grade']}%)",
                 file=sys.stderr,
             )
-            continue
 
         # Compute grade value for CSV
         grade_pct = tmp_entry["grade"]
@@ -256,10 +326,8 @@ def main():
             f"Student {csv_student_name}({student_id}) does not have a grade",
             file=sys.stderr,
         )
-        row[mp_col] = "0.00" if points_possible is not None else "0"
 
     # Write output CSV — preserve original BOM and line endings
-    import io
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator=line_ending)
     for row in rows:

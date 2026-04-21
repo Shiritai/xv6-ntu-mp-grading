@@ -22,7 +22,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$COOL" || -z "$GRADE" || -z "$MAP" || -z "$MP" ]]; then
-    echo "Usage: $0 --cool <course.csv> --grade <grades.json> --map <accounts.tsv> --mp <keyword> [--output <out.csv>]" >&2
+    cat >&2 <<EOF
+Usage: $0 --cool <cool_gradebook.csv> \\
+          --grade <final_grades.json> \\
+          --map <accounts.tsv|accounts.csv> \\
+          --mp <keyword> \\
+          [--output <out.csv>]
+
+  --cool   Full grade sheet downloaded from NTU COOL (course Grades page).
+  --grade  final_grades.json produced by auto_grade_mp.sh.
+  --map    Student account mapping (Name, StudentID, GithubUsername).
+           TSV or CSV — the delimiter is auto-detected from the extension.
+  --mp     Assignment keyword matching the target COOL column (e.g. mp0).
+  --output Destination CSV (default: combined_grade.csv).
+EOF
     exit 1
 fi
 
