@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import shutil
@@ -8,6 +9,19 @@ import argparse
 import concurrent.futures
 
 TA_GRADING_COMMIT_MSG = 'chore(grading): deploy private tests and trigger grading'
+TA_REPAIR_COMMIT_MSG = 'fix(grading): restore student code and redeploy correct grading payload'
+
+
+def parse_ta_emails(mp_conf_path):
+    """Extract TA_EMAILS (space-separated) from a payload mp.conf file."""
+    if not os.path.isfile(mp_conf_path):
+        return []
+    with open(mp_conf_path, "r") as f:
+        for line in f:
+            m = re.match(r'^\s*TA_EMAILS\s*=\s*"([^"]*)"', line)
+            if m:
+                return [e for e in m.group(1).split() if e]
+    return []
 
 def run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
@@ -26,6 +40,84 @@ def pr_success(msg):
 
 def pr_warn(msg):
     print(f"\033[93m[WARN]\033[0m {msg}")
+
+def repair_repo(repo_full_name, payload_dir, branch, ta_emails):
+    """Restore student files to their last commit, then overlay the correct payload."""
+    pr_info(f"Repairing {repo_full_name} on branch '{branch}'...")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        clone_dir = os.path.join(tmpdir, "repo")
+
+        ok, err = run_cmd(f"gh repo clone {repo_full_name} {clone_dir} -- -b {branch} --depth 50")
+        if not ok:
+            pr_error(f"Failed to clone {repo_full_name}:\n{err}")
+            return None
+
+        # Find the last commit NOT by any TA listed in mp.conf TA_EMAILS
+        ok, log_out = run_cmd("git log --format='%H %ae'", cwd=clone_dir)
+        if not ok:
+            pr_error(f"Failed to read git log in {repo_full_name}:\n{log_out}")
+            return None
+
+        ta_set = set(ta_emails)
+        student_sha = None
+        for line in log_out.splitlines():
+            sha, _, email = line.partition(" ")
+            if email and email not in ta_set:
+                student_sha = sha
+                break
+
+        if not student_sha:
+            pr_error(f"Could not find a non-TA commit in {repo_full_name} (TA_EMAILS={sorted(ta_set)})")
+            return None
+
+        pr_info(f"  Last student commit: {student_sha[:8]} in {repo_full_name}")
+
+        # Restore working tree to the student's state (history unchanged)
+        ok, err = run_cmd(f"git checkout {student_sha} -- .", cwd=clone_dir)
+        if not ok:
+            pr_error(f"Failed to restore student files in {repo_full_name}:\n{err}")
+            return None
+
+        # Overlay the correct payload
+        if payload_dir and os.path.isdir(payload_dir):
+            try:
+                for item in os.listdir(payload_dir):
+                    s = os.path.join(payload_dir, item)
+                    d = os.path.join(clone_dir, item)
+                    if os.path.isdir(s):
+                        shutil.copytree(s, d, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(s, d)
+            except Exception as e:
+                pr_error(f"Failed to copy payload to {repo_full_name}: {e}")
+                return None
+
+        run_cmd("git add -A", cwd=clone_dir)
+        ok, status = run_cmd("git status --porcelain", cwd=clone_dir)
+        if not status:
+            pr_warn(f"No changes needed for {repo_full_name} (already correct)")
+            ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
+            return (sha, False) if ok else None
+
+        ok, err = run_cmd(f"git commit -m '{TA_REPAIR_COMMIT_MSG}'", cwd=clone_dir)
+        if not ok:
+            pr_error(f"Failed to commit repair in {repo_full_name}:\n{err}")
+            return None
+
+        ok, err = run_cmd("git push origin HEAD", cwd=clone_dir)
+        if not ok:
+            pr_error(f"Failed to push repair to {repo_full_name}:\n{err}")
+            return None
+
+        ok, sha = run_cmd("git rev-parse HEAD", cwd=clone_dir)
+        if not ok or not sha:
+            pr_error(f"Failed to retrieve HEAD SHA for {repo_full_name}.")
+            return None
+
+        pr_success(f"Repaired {repo_full_name} (Commit: {sha})")
+        return sha, True
+
 
 def process_repo(repo_full_name, payload_dir, branch, force=False):
     pr_info(f"Processing {repo_full_name} on branch '{branch}'...")
@@ -119,6 +211,7 @@ def main():
     parser.add_argument("--branch", help="Target branch in student repositories (overrides prefix).")
     parser.add_argument("--prefix", default="ntuos2026", help="Course prefix for branch.")
     parser.add_argument("--force-push", action="store_true", help="Force an empty commit to trigger CI even if there are no payload changes.")
+    parser.add_argument("--repair", action="store_true", help="Repair mode: restore student code to their last commit, then redeploy the correct payload. TA emails are read from <payload>/mp.conf TA_EMAILS.")
     parser.add_argument("--exclude-repo", help="Comma-separated list of 'owner/repo' to exclude from grading.")
     args = parser.parse_args()
 
@@ -146,19 +239,31 @@ def main():
     payload_dir = os.path.join(args.grading_dir, args.mp, "payload")
     if not os.path.isdir(payload_dir):
         pr_warn(f"Payload directory {payload_dir} not found. Will trigger grading with empty commits.")
+
+    ta_emails = []
+    if args.repair:
+        ta_emails = parse_ta_emails(os.path.join(payload_dir, "mp.conf"))
+        if not ta_emails:
+            pr_error(f"--repair requires TA_EMAILS in {payload_dir}/mp.conf, none found. Aborting.")
+            sys.exit(1)
+        pr_info(f"Repair mode: TA_EMAILS = {ta_emails}")
         
     # We output grading_targets.json inside the MP result directory
     mp_out_dir = os.path.join(args.grading_dir, args.mp, "result")
     os.makedirs(mp_out_dir, exist_ok=True)
     output_target_file = os.path.join(mp_out_dir, f"grading_targets.json")
     
-    pr_info(f"Starting grading trigger for {len(student_repos)} repositories for {args.mp}...")
-    
+    mode = "repair" if args.repair else "trigger"
+    pr_info(f"Starting grading {mode} for {len(student_repos)} repositories for {args.mp}...")
+
     targets = []
-    
+
     push_occurred = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_repo = {executor.submit(process_repo, repo, payload_dir, target_branch, args.force_push): repo for repo in student_repos}
+        if args.repair:
+            future_to_repo = {executor.submit(repair_repo, repo, payload_dir, target_branch, ta_emails): repo for repo in student_repos}
+        else:
+            future_to_repo = {executor.submit(process_repo, repo, payload_dir, target_branch, args.force_push): repo for repo in student_repos}
         for future in concurrent.futures.as_completed(future_to_repo):
             repo_full_name = future_to_repo[future]
             try:

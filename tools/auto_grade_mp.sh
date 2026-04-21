@@ -8,7 +8,7 @@ else
 fi
 
 # --- Parameter Parsing ---
-USAGE="Usage: $0 --mp <mp_id> [--students <students_json_file> | --repo <owner/repo>] [--prefix <course_prefix>] [--force-push] [--force-fetch] [--exclude-repo <repo1,repo2>]"
+USAGE="Usage: $0 --mp <mp_id> [--students <students_json_file> | --repo <owner/repo>] [--prefix <course_prefix>] [--force-push] [--force-fetch] [--repair] [--exclude-repo <repo1,repo2>]"
 
 MP_ID=""
 STUDENTS_FILE=""
@@ -16,6 +16,7 @@ REPO=""
 PREFIX="ntuos2026"
 FORCE_PUSH=false
 FORCE_FETCH=false
+REPAIR=false
 EXCLUDE_REPO=""
 
 while [[ "$#" -gt 0 ]]; do
@@ -26,6 +27,7 @@ while [[ "$#" -gt 0 ]]; do
         --prefix) PREFIX="$2"; shift ;;
         --force-push) FORCE_PUSH=true ;;
         --force-fetch) FORCE_FETCH=true ;;
+        --repair) REPAIR=true ;;
         --exclude-repo) EXCLUDE_REPO="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; echo "$USAGE"; exit 1 ;;
     esac
@@ -53,6 +55,7 @@ echo "Students roster: ${STUDENTS_FILE}"
 echo "Workspace dir: ${GRADING_WORKSPACE}"
 echo "Force Push: ${FORCE_PUSH}"
 echo "Force Fetch: ${FORCE_FETCH}"
+echo "Repair Mode: ${REPAIR}"
 echo "Exclude Repo: ${EXCLUDE_REPO}"
 echo "=================================================="
 
@@ -74,12 +77,17 @@ elif [[ -n "$REPO" ]]; then
     TARGET_ARG="--repo ${REPO}"
 fi
 
+REPAIR_ARG=""
+if [[ "$REPAIR" == true ]]; then
+    REPAIR_ARG="--repair"
+fi
+
 EXCLUDE_ARG=""
 if [[ -n "$EXCLUDE_REPO" ]]; then
     EXCLUDE_ARG="--exclude-repo ${EXCLUDE_REPO}"
 fi
 
-$PYTHON_RUN "${SDIR}/trigger_grading.py" --mp "${MP_ID}" ${TARGET_ARG} --grading-dir "${GRADING_WORKSPACE}" ${FORCE_PUSH_ARG} --branch "${PREFIX}/${MP_ID}" ${EXCLUDE_ARG}
+$PYTHON_RUN "${SDIR}/trigger_grading.py" --mp "${MP_ID}" ${TARGET_ARG} --grading-dir "${GRADING_WORKSPACE}" ${FORCE_PUSH_ARG} ${REPAIR_ARG} --branch "${PREFIX}/${MP_ID}" ${EXCLUDE_ARG}
 
 if [[ ! -f "$TARGETS_FILE" ]]; then
     echo "❌ Error: ${TARGETS_FILE} was not successfully generated. Aborting grading."
