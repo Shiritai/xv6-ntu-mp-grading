@@ -150,9 +150,57 @@ anon-chihaya/ntuos2026-mpX,Success,100,https://github.com/anon-chihaya/ntuos2026
 **Grading Deliverables:**
 
 * `../mpX/result/final_grades.csv`: Ready for direct opening or uploading for translation against NTU COOL.
+* `../mpX/result/final_grades.json`: Full, structured per-student grading records (score, SHA fingerprint, test-case breakdown, deadline/penalty metadata). This is the canonical input for `ntu_combine_grade.sh`.
 * `../mpX/result/reports/`: Contains individual execution logs and `report.json` for the entire class.
 
 You can now use `final_grades.csv` to directly grade on NTU COOL!
+
+### Step 4 (Optional): Fold grades back into the NTU COOL gradebook
+
+`final_grades.csv` is keyed by `<github-owner>/ntuos2026-mpX`, which is not the format NTU COOL expects for bulk upload. Use `ntu_combine_grade.sh` to translate the raw grading output into a gradebook CSV that COOL will accept:
+
+```bash
+cd xv6-ntu-mp-grading/tools
+./ntu_combine_grade.sh \
+    --cool  <cool_gradebook.csv> \
+    --grade ../mpX/result/final_grades.json \
+    --map   student-github-accounts.csv \
+    --mp    mpX \
+    --output ../mpX/result/gradebook.csv
+```
+
+**What you need to prepare:**
+
+* `--cool` — download the **full grade sheet** from the course's NTU COOL Grades page (Export → CSV). The script reuses it as both the template (to preserve unrelated columns) and the identity source (`SIS Login ID` → student ID, `Student` → name). BOM and line endings of the original file are preserved on output.
+* `--grade` — the `final_grades.json` produced by `auto_grade_mp.sh` in the previous step. This is the score source, keyed by GitHub username inside `detail.student_info.github_username`.
+* `--map` — the `Name, StudentID, GithubUsername` mapping (3 columns). `.tsv` and `.csv` are both accepted; the delimiter is auto-detected from the extension, with a `csv.Sniffer` fallback for other extensions. The `student-github-accounts.csv` generated in Step 1 works as-is.
+* `--mp` — case-insensitive keyword that selects the destination COOL column (e.g. `mp0` matches columns like `MP0 (377381)` or `mp0 - Boot Loader (…)`).
+* `--output` — destination CSV. It mirrors the input COOL layout with only the matched MP column updated.
+
+**Cross-checks the script performs:**
+
+1. Matches COOL rows to grades by **student ID** (from `SIS Login ID`), not by name.
+2. After ID match, verifies the names align (every token in the map's name must appear in the COOL row's `Student` field; CJK characters are compared per-codepoint, punctuation is ignored). A mismatch is logged as a `Ghost …` warning to stderr and the row is skipped rather than silently mis-graded.
+3. Reads `Points Possible` from row 3 (the COOL convention) and rescales the JSON percentage accordingly, so a `100` in the JSON becomes `10.00` in a `10`-point column.
+4. Any COOL row that ends up without a matched grade is filled with `0` / `0.00` and printed as a warning — no student is left blank by accident.
+
+### Step 3.x (Recovery): Repair a broken payload push
+
+If you accidentally deployed a wrong payload (e.g. shipped reference solutions, or an incomplete `tests/` set) and every student's CI now reports a useless score, do **not** rewrite history on student remotes. Instead, fix the payload locally, then run:
+
+```bash
+./auto_grade_mp.sh --mp mpX --students ../mpX/result/students_mpX.json --repair
+```
+
+The `--repair` flag changes Phase 1 behavior:
+
+1. Clone each student's grading branch with enough history (depth 50) to look past the bad TA commits.
+2. Walk `git log` and pick the most recent commit whose committer email is **not** listed in `<payload>/mp.conf TA_EMAILS`. That commit represents the student's last real state.
+3. `git checkout <student_sha> -- .` restores the working tree to that state — **history is preserved**, no force-push, no branch divergence.
+4. Overlay the now-correct `mpX/payload/` on top.
+5. Commit as `fix(grading): restore student code and redeploy correct grading payload` and push, which re-triggers CI.
+
+Because the TA whitelist is read directly from `mpX/payload/mp.conf` (the `TA_EMAILS` line), there is no separate flag to keep in sync — update `mp.conf` and `--repair` follows. You can rehearse on one student first via `--repo <owner>/<repo> --repair` before fanning out to the whole class.
 
 ---
 
@@ -177,15 +225,17 @@ A shell script designed for robust repository discovery and inventory management
 The overarching orchestration shell script. It manages the entire grading lifecycle by invoking Python sub-modules sequentially.
 
 * **Mechanism**: Dispatches `trigger_grading.py` to push payloads and spawn CI workflows. It subsequently performs a stateless single crawl via `grading_crawler.py` to capture the current progress and aggregate results.
-* **Usage**: `./auto_grade_mp.sh --mp <mp_id> [--students <roster_json> | --repo <owner/repo>] [--prefix <course_prefix>] [--force]`
+* **Usage**: `./auto_grade_mp.sh --mp <mp_id> [--students <roster_json> | --repo <owner/repo>] [--prefix <course_prefix>] [--force-push] [--force-fetch] [--repair] [--exclude-repo <repo1,repo2>]`
+* **`--repair`**: Switches Phase 1 into recovery mode. Restores each student's working tree to their last non-TA commit (TA emails sourced from `<payload>/mp.conf TA_EMAILS`), overlays the current payload, and pushes a single corrective commit. Use this when an earlier payload push contaminated all students' CI results. History is preserved — no force-push, no branch divergence.
 
 ### `trigger_grading.py`
 
 A multi-threaded Python executor responsible for payload injection and CI initiation.
 
 * **Mechanism**: Using `concurrent.futures`, it concurrently accesses listed student repositories via `gh api`. It commits the designated `mpX/payload/` structure directly to the student's root tree on the target branch (inherited from `--prefix`), establishing an official TA benchmark environment.
-* **Idempotency (Caching Focus)**: Prior to committing, it compares the payload against the student's latest tree. If the payload is identical to the current HEAD, the system infers no meaningful updates occurred and gracefully skips the redundant commit, significantly conserving GitHub Action minutes. Forced overriding is achieved via the `--force` flag.
-* **Usage**: `python3 trigger_grading.py --mp <mp_id> [--students <json> | --repo <owner/repo>] --grading-dir <path> [--prefix <course>] [--force]`
+* **Idempotency (Caching Focus)**: Prior to committing, it compares the payload against the student's latest tree. If the payload is identical to the current HEAD, the system infers no meaningful updates occurred and gracefully skips the redundant commit, significantly conserving GitHub Action minutes. Forced overriding is achieved via the `--force-push` flag.
+* **Repair Mode (`--repair`)**: Replaces the normal payload-push behavior with a forward-only undo. For each repo, it clones with depth 50, scans `git log` for the most recent commit whose committer email is **not** in the payload's `mp.conf TA_EMAILS` list, then `git checkout <student_sha> -- .` to roll the working tree back to that state without touching history. The current payload is overlaid on top and committed as `fix(grading): restore student code and redeploy correct grading payload`. The TA whitelist is intentionally sourced from `mp.conf` (single source of truth) rather than a CLI flag.
+* **Usage**: `python3 trigger_grading.py --mp <mp_id> [--students <json> | --repo <owner/repo>] --grading-dir <path> [--prefix <course>] [--branch <branch>] [--force-push] [--repair] [--exclude-repo <repo1,repo2>]`
 
 ### `grading_crawler.py`
 
@@ -208,3 +258,16 @@ The Hot-Sync broadcast tool for TAs to securely map and push updates to student 
   * `--workers`: (Optional) Number of parallel threads to use. Default is 4.
   * `--repo`: (Optional) Single target repository URL, used primarily for testing. Mutually exclusive with `--repos-list`.
   * `--dry-run`: Preview mode. Stages changes and creates a local commit in independent `.tmp/` directories without pushing to the remotes.
+
+### `ntu_combine_grade.sh`
+
+A thin shell wrapper around `ntu_combine_grade.py` that merges `auto_grade_mp`'s `final_grades.json` into an NTU COOL gradebook CSV, producing a drop-in upload.
+
+* **Mechanism**: Joins three data sources — the COOL gradebook CSV (template + identity), the grading JSON (scores keyed by GitHub username), and a Name/StudentID/GithubUsername mapping — by first looking up each COOL row's student ID in the mapping, then verifying the names agree. Scores are rescaled against `Points Possible` (row 3 of the COOL export) before being written into the MP column. BOM and line endings of the original COOL CSV are preserved byte-faithfully so that re-uploading to COOL does not trip the server's strict parser.
+* **Safety Nets**: Mismatched name → skipped with a `Ghost …` warning. Unmatched COOL rows → filled with `0` and reported. No silent overwrites.
+* **Usage**: `./ntu_combine_grade.sh --cool <cool_gradebook.csv> --grade <final_grades.json> --map <accounts.tsv|accounts.csv> --mp <keyword> [--output <out.csv>]`
+  * `--cool`: Full grade sheet exported from the course's NTU COOL Grades page (Export → CSV). Acts as both template and identity source (`SIS Login ID`, `Student`).
+  * `--grade`: `final_grades.json` produced by `auto_grade_mp.sh` (array of records with `score` and `detail.student_info.github_username`).
+  * `--map`: Three-column mapping (Name, StudentID, GithubUsername). Both TSV and CSV are accepted; the delimiter is auto-detected from the file extension, with a `csv.Sniffer` fallback for ambiguous extensions. Quoted fields and UTF-8 BOM are handled.
+  * `--mp`: Case-insensitive keyword matching the target COOL column name prefix (e.g. `mp0` → `MP0 (377381)`, `mp1` → `MP1 - Thread Operation (…)`).
+  * `--output`: Destination CSV. Defaults to `combined_grade.csv`.

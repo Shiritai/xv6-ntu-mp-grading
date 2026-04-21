@@ -12,4 +12,5 @@ __pycache__/
 *.csv
 tmp
 whitelist.txt
+cron_accept_invites.sh
 tests/sync_validation/sandbox*
